@@ -1,12 +1,13 @@
 # Waze Live Map Route Toolkit
 
-Choose **Car**, **Motorcycle**, or **Taxi** routes directly on Waze Live Map.
+Choose **Car**, **Motorcycle**, or **Taxi** routes and adjust route preferences directly on Waze Live Map.
 
 > An unofficial community project, not affiliated with or endorsed by Google or Waze.
 
 ## Features
 
 - Easily switch between Car, Motorcycle, and Taxi routes.
+- Avoid tolls, unpaved roads, ferries, freeways, and difficult turns.
 - Supported languages: **VN | EN**.
 
 ## Installation
@@ -21,19 +22,26 @@ Works on Waze Live Map, including the beta website.
 
 1. Enter your starting point and destination.
 2. Click the Car, Motorcycle, or Taxi icon to view routes for that vehicle.
+3. Expand **Avoid** to adjust tolls, ferries, freeways, difficult turns, and unpaved roads.
 
 ## Defaults
 
-| Setting           | Default                                                |
-| ----------------- | ------------------------------------------------------ |
-| Vehicle           | Car, unless a vehicle is already specified in the link |
-| Language          | Matches your Waze page language                        |
-| Fallback language | EN                                                     |
+| Setting               | Default value                                                            |
+| --------------------- | ------------------------------------------------------------------------ |
+| Vehicle               | Car                                                                      |
+| Avoid tolls           | Off                                                                      |
+| Avoid ferries         | Off                                                                      |
+| Avoid freeways        | Off                                                                      |
+| Avoid difficult turns | On                                                                       |
+| Unpaved roads         | Don't allow                                                              |
+| Avoid panel           | Collapsed                                                                |
+| Language              | Vietnamese or English based on the Waze page language; otherwise English |
 
 ## Troubleshooting
 
-- **Icons missing?** Make sure the script is enabled and the directions panel is open, then reload the page.
+- **Vehicle & avoid options missing?** Make sure the script is enabled and the directions panel is open, then reload the page.
 - **Route update failed?** Click the vehicle icon again to retry.
+- **Controls no longer update routes?** Check for a newer script version. Changes to Waze's website can break compatibility.
 - **Still not working?** Report a bug on [GitHub Issues](https://github.com/vdt2210/waze-live-map-route-toolkit/issues).
 
 Available routes depend on Waze and your region. Different vehicle types may show the same route.
