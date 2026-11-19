@@ -11,7 +11,7 @@ npm --prefix tests ci
 npm --prefix tests test
 ```
 
-The full suite checks script syntax and runs both test files. The UI test requires `jsdom`, installed by `npm ci`. Both tests locate the userscript relative to their own files.
+The full suite checks script syntax and runs all three test files. The UI tests require `jsdom`, installed by `npm ci`. All tests locate the userscript relative to their own files.
 
 A successful run prints a `PASS:` message for each test file and exits with code `0`. An assertion failure prints an error and exits with a nonzero code.
 
@@ -28,11 +28,13 @@ A successful run prints a `PASS:` message for each test file and exits with code
 - Slow successful requests and genuine routing failures.
 - Closing the directions panel or changing the destination during a request.
 - Avoid settings, unpaved-road defaults and overrides, preservation of unknown route options, and translation fallback.
-- The expected script version (`1.1.0`).
+- The expected script version (`1.2.0`).
 
 [`avoid-ui.test.cjs`](./avoid-ui.test.cjs) checks the Avoid panel, checkbox and dropdown interaction, keyboard navigation, translations, URL state, remounting, and missing route bridge behavior in `jsdom`.
 
 ## Limits and manual checks
+
+`route-chips.test.cjs` verifies per-option toll prices and currency formatting, zero and missing prices, jam counts and severity, chip placement and wrapping, rerender cleanup, and committed React fiber selection with a simulated DOM. It does not verify live Waze compatibility.
 
 The routing test mocks Waze's route bridge and disables UI mounting. The UI test uses a simulated DOM and checkbox test double. These tests do not verify the live React integration, network requests, visual rendering, or accessibility in a real browser.
 

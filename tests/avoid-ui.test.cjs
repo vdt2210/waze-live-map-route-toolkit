@@ -5,7 +5,7 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'waze-
 const fixture = `<html lang="vi"><head></head><body>
   <script id="i18n-strings" type="application/json">${JSON.stringify({ locale: 'vi', translations: { livemap: { route: { badges: { toll: 'Thu phí cộng đồng' } } } } })}</script>
   <div class="wm-routing"><div class="wm-routing__title"></div>
-  <div class="wz-search-from-to">Native search</div><div class="wm-routing__scrollable">
+  <div class="wz-search-from-to">Native search</div><div id="search-suggestions" class="wz-search-suggestions"></div><div class="wm-routing__scrollable">
   <div class="wm-routing-schedule wm-routing__reducer">Native schedule</div></div></div>
 </body></html>`;
 const dom = new JSDOM(fixture, {
@@ -24,7 +24,11 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   window.eval(source);
   const panel = document.getElementById('waze-route-avoids');
   const schedule = document.querySelector('.wm-routing-schedule');
-  assert.equal(schedule.previousElementSibling, panel);
+  const scrollable = schedule.closest('.wm-routing__scrollable');
+  const suggestions = document.getElementById('search-suggestions');
+  assert.equal(suggestions.nextElementSibling, panel);
+  assert.equal(scrollable.previousElementSibling, panel);
+  assert.equal(panel.closest('.wm-routing__scrollable'), null);
   assert.equal(panel.tagName, 'DETAILS');
   assert.equal(panel.open, false);
   const initialURL = window.location.href;
@@ -36,6 +40,9 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(panel.open, true, 'ordinary remount preserves expansion');
   assert.equal(document.querySelectorAll('#waze-route-avoids').length, 1);
   assert.equal(panel.querySelectorAll('wz-checkbox').length, 4);
+  for (const name of ['avoid-tolls', 'avoid-ferries', 'avoid-highways', 'avoid-unpaved']) {
+    assert.equal(panel.querySelectorAll(`.w-icon-${name}`).length, 0);
+  }
   assert.equal(panel.querySelectorAll('wz-select').length, 0);
   assert.equal(panel.querySelector('[data-i18n="unpaved"]').textContent, 'Đường chưa trải nhựa');
   assert.equal(panel.querySelector('[data-i18n="tolls"]').textContent, 'Thu phí cộng đồng');
@@ -49,12 +56,12 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(new URL(window.location.href).searchParams.get('rp_vehicleType'), 'MOTORCYCLE');
   const unpaved = panel.querySelector('[data-avoid="unpaved"]');
   unpaved.click();
-  const menu = document.querySelector('.wvi-avoid-menu');
+  const menu = document.querySelector('.wlmrt-avoid-menu');
   assert.ok(menu);
   assert.equal(unpaved.getAttribute('aria-expanded'), 'true');
   assert.equal(menu.querySelectorAll('[role="option"]').length, 3);
   menu.querySelector('[data-value="allow"]').click();
-  assert.equal(document.querySelector('.wvi-avoid-menu'), null);
+  assert.equal(document.querySelector('.wlmrt-avoid-menu'), null);
   unpaved.click();
   document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', {key:'ArrowDown', bubbles:true}));
   assert.equal(document.activeElement.dataset.value, 'avoid_long');
@@ -63,18 +70,15 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(unpaved.getAttribute('aria-expanded'), 'false');
   unpaved.click();
   document.body.click();
-  assert.equal(document.querySelector('.wvi-avoid-menu'), null);
+  assert.equal(document.querySelector('.wlmrt-avoid-menu'), null);
   assert.match(new URL(window.location.href).searchParams.get('rp_options'), /AVOID_TRAILS:f/);
   assert.ok(!new URL(window.location.href).searchParams.get('rp_options').includes('AVOID_LONG_TRAILS:'));
 
-  const suggestions = document.createElement('div');
-  suggestions.className = 'wz-search-suggestions';
-  schedule.parentElement.before(suggestions);
   unpaved.click();
   suggestions.textContent = 'Search result';
   await frame();
   assert.equal(window.getComputedStyle(panel).display, 'none');
-  assert.equal(document.querySelector('.wvi-avoid-menu'), null, 'hide the portaled menu along with the avoid panel');
+  assert.equal(document.querySelector('.wlmrt-avoid-menu'), null, 'hide the portaled menu along with the avoid panel');
   suggestions.textContent = '';
   await frame();
   assert.notEqual(window.getComputedStyle(panel).display, 'none');
@@ -83,6 +87,7 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   document.getElementById('i18n-strings').textContent = JSON.stringify({ locale: 'vi', translations: { livemap: { route: { badges: { toll: 'Bản dịch mới' } } } } });
   await frame();
   assert.equal(panel.querySelector('[data-i18n="tolls"]').textContent, 'Bản dịch mới');
+  assert.equal(panel.querySelectorAll('.w-icon').length, 0, 'Avoid controls consistently use text labels');
   assert.equal(document.querySelectorAll('#waze-route-avoids').length, 1);
 
   // React replacing the scrollable panel must reattach the existing controls.
@@ -90,7 +95,8 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   panel.remove(); schedule.replaceWith(replacement);
   await frame();
   const remounted = document.getElementById('waze-route-avoids');
-  assert.equal(replacement.previousElementSibling, remounted);
+  assert.equal(scrollable.previousElementSibling, remounted);
+  assert.equal(remounted.closest('.wm-routing__scrollable'), null);
   assert.equal(remounted.querySelector('[data-avoid="AVOID_FERRIES"]').checked, true);
   assert.equal(remounted.querySelector('[data-avoid="unpaved"]').dataset.value, 'allow');
 
@@ -109,6 +115,6 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(window.location.href, before);
   assert.equal(unavailable.checked, false);
   assert.equal(remounted.querySelector('[data-i18n="retry"]'), null);
-  assert.equal(document.querySelector('.wvi-status'), null);
+  assert.equal(document.querySelector('.wlmrt-status'), null);
   console.log('PASS: collapsed disclosure, Waze component contracts, no startup route, UI placement, translations, URL interaction, remounting, history, bridge failure without extra error UI.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => window.close());
