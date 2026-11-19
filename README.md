@@ -12,8 +12,10 @@ Choose **Car**, **Motorcycle**, or **Taxi** routes directly on Waze Live Map.
 ## Installation
 
 1. Install a userscript manager, such as Tampermonkey.
-2. Create a new script, paste the contents of [this file](./waze-live-map-route-toolkit.user.js), and save.
+2. Open [the script on Greasy Fork](https://greasyfork.org/en/scripts/606237-waze-live-map-route-toolkit), click **Install this script**, and confirm installation in your userscript manager.
 3. Open or reload [Waze Live Map](https://www.waze.com/live-map).
+
+Alternatively, create a new script in your userscript manager, paste the contents of [this file](./waze-live-map-route-toolkit.user.js), and save.
 
 Works on Waze Live Map, including the beta website.
 
