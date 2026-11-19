@@ -1,6 +1,5 @@
 // ==UserScript==
-// @name           Waze Map Vehicle Selector
-// @name:vi        Chọn phương tiện trên Waze Map
+// @name           Waze Live Map Route Toolkit
 // @namespace      https://greasyfork.org/en/users/1603731-vdt2210
 // @version        1.0
 // @author         vdt2210
@@ -41,7 +40,7 @@
   try {
     const data = JSON.parse(document.getElementById('i18n-strings')?.textContent || '{}');
     locale = data.locale || locale;
-  } catch (error) { console.warn('[Waze Map Vehicle Selector] Cannot read translations', error); }
+  } catch (error) { console.warn('[Waze Live Map Route Toolkit] Cannot read translations', error); }
   const normalizeLocale = value => value.toLowerCase().replace(/_/g, '-');
   const language = normalizeLocale(locale);
   const locales = [...new Set([language, language.split('-')[0], 'en'])];
@@ -172,7 +171,7 @@
       // Keep the chosen URL on request errors so clicking the same icon retries.
       if (!started) history.replaceState(history.state, '', oldURL);
       message = t('updateFailed');
-      console.warn('[Waze Map Vehicle Selector]', error);
+      console.warn('[Waze Live Map Route Toolkit]', error);
     } finally {
       if (requestId === requestSequence) {
         if (activeRequest?.id === requestId) activeRequest = null;

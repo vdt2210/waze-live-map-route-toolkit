@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('waze-map-vehicle-selector.user.js', 'utf8');
+const source = fs.readFileSync('waze-live-map-route-toolkit.user.js', 'utf8');
 
 function setup() {
   const timers = [];
