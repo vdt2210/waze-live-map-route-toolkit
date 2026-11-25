@@ -8,6 +8,8 @@ Choose **Car**, **Motorcycle**, or **Taxi** routes and adjust route preferences 
 
 - Easily switch between Car, Motorcycle, and Taxi routes.
 - Avoid tolls, unpaved roads, ferries, freeways, and difficult turns.
+- Show average route speed.
+- Route option alert badges.
 - Supported languages: **VN | EN**.
 
 ## Installation

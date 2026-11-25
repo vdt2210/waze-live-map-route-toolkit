@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Waze Live Map Route Toolkit
 // @namespace      https://greasyfork.org/en/users/1603731-vdt2210
-// @version        1.1.0
+// @version        1.2.0
 // @author         vdt2210
 // @description    Select a vehicle and avoid tolls, ferries, freeways, difficult turns, or unpaved roads on Waze Map.
 // @description:vi Chọn phương tiện và tùy chọn tránh thu phí, phà, cao tốc, rẽ khó, đường chưa trải nhựa trên Waze Map.
@@ -27,6 +27,14 @@
       allow: 'Allow',
       avoid_long: 'Avoid long ones',
       avoid_all: "Don't allow",
+      averageSpeed: 'Average speed',
+      traffic: 'Traffic',
+      trafficLevels: {
+        light: 'Light traffic',
+        moderate: 'Moderate traffic',
+        heavy: 'Heavy traffic',
+        bumperToBumper: 'Bumper to bumper traffic',
+      },
     },
     vi: {
       vehicles: { PRIVATE: 'Ô tô', MOTORCYCLE: 'Xe máy', TAXI: 'Taxi' },
@@ -40,6 +48,14 @@
       allow: 'Cho phép',
       avoid_long: 'Tránh đoạn dài',
       avoid_all: 'Không cho phép',
+      averageSpeed: 'Tốc độ trung bình',
+      traffic: 'Kẹt xe',
+      trafficLevels: {
+        light: 'Kẹt xe nhẹ',
+        moderate: 'Kẹt xe vừa',
+        heavy: 'Kẹt xe nặng',
+        bumperToBumper: 'Kẹt xe nghiêm trọng',
+      },
     },
   };
   const ID = 'waze-vehicle-icons';
@@ -55,6 +71,12 @@
   let liveTranslations = {};
   let translationText;
   const liveKeys = {
+    averageSpeed: ['livemap.alerts.jam.average_speed'],
+    traffic: ['livemap.alerts.jam.default'],
+    'trafficLevels.light': ['livemap.alerts.jam.jam_light_traffic'],
+    'trafficLevels.moderate': ['livemap.alerts.jam.jam_moderate_traffic'],
+    'trafficLevels.heavy': ['livemap.alerts.jam.jam_heavy_traffic'],
+    'trafficLevels.bumperToBumper': ['livemap.alerts.jam.jam_standstill_traffic'],
     tolls: [
       'livemap.route.badges.toll',
       'livemap.route_list.badges.toll',
@@ -307,6 +329,21 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
+      .wlmrt-route-badges { display: flex; flex-wrap: wrap; margin-top: 6px; }
+      .wm-routes-item-desktop__footer:has(> .wlmrt-average-speed) { flex-wrap: wrap; }
+      .wlmrt-average-speed { display: block; flex-basis: 100%; width: 100%; }
+      .wlmrt-route-badges .wm-routing-badges__item { white-space: normal; overflow-wrap: anywhere; max-width: 100%; padding: 2px 6px; }
+      .wlmrt-route-badges .w-icon { margin-inline-end: 4px; vertical-align: middle; }
+      .wlmrt-route-badges .wlmrt-traffic { --wlmrt-traffic-color: #ffc400; }
+      .wlmrt-route-badges .wlmrt-traffic--light { --wlmrt-traffic-color: #ffc400; }
+      .wlmrt-route-badges .wlmrt-traffic--moderate { --wlmrt-traffic-color: #ffa600; }
+      .wlmrt-route-badges .wlmrt-traffic--heavy { --wlmrt-traffic-color: #ff5252; }
+      .wlmrt-route-badges .wlmrt-traffic--bumperToBumper { --wlmrt-traffic-color: #ff5252; }
+      .wlmrt-route-badges .wlmrt-traffic-dot {
+        display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+        margin-inline-end: 6px; background-color: var(--wlmrt-traffic-color);
+        vertical-align: middle;
+      }
       #${ID} {
         display: flex; flex-wrap: wrap; align-items: center; justify-content: space-evenly;
         gap: 12px; padding: 0 20px 16px; flex: 0 0 auto;
@@ -318,39 +355,39 @@
         padding: 0; margin: 0; min-width: 64px;
         cursor: pointer; font: 12px/1.4 Arial, sans-serif;
       }
-      #${ID} .wvi-icon {
+      #${ID} .wlmrt-icon {
         display: flex; align-items: center; justify-content: center;
         width: 56px; height: 34px; border-radius: 100px;
         transition: background-color .15s ease, color .15s ease;
       }
-      #${ID} button:hover .wvi-icon { background: #edf3f5; }
-      #${ID} button[aria-pressed="true"] .wvi-icon {
+      #${ID} button:hover .wlmrt-icon { background: #edf3f5; }
+      #${ID} button[aria-pressed="true"] .wlmrt-icon {
         background-color: var(--wz-button-background-color, var(--primary, #0099ff));
         color: var(--on_primary, #ffffff);
       }
       #${ID} button:focus-visible { outline: 2px solid var(--primary, #0099ff); outline-offset: 4px; border-radius: 8px; }
       #${ID} .w-icon { font-size: 24px; line-height: 1; }
       #${AVOID_ID} {
-        box-sizing: border-box; width: 100%; padding: 0 20px 16px;
+        box-sizing: border-box; width: 100%; padding: 0 20px 16px; flex: 0 0 auto;
         color: var(--content_default, #202124); background: #fff;
         font-family: inherit; font-size: 14px; line-height: 24px;
       }
       #${AVOID_ID} fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
       #${AVOID_ID} summary { cursor: pointer; }
       #${AVOID_ID}[open] summary { margin-bottom: 8px; }
-      #${AVOID_ID} .wvi-avoid-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-bottom: 8px; }
+      #${AVOID_ID} .wlmrt-avoid-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-bottom: 8px; }
       #${AVOID_ID} label { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
       #${AVOID_ID} wz-checkbox { --wz-checkbox-margin: 8px; min-width: 0; }
-      #${AVOID_ID} .wvi-unpaved { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      #${AVOID_ID} .wlmrt-unpaved { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       #${AVOID_ID} button { font: inherit; color: var(--primary, #0099ff); background: transparent; border: 0; padding: 8px 0 0; cursor: pointer; }
-      #${AVOID_ID} .wvi-unpaved .wz-react-dropdown__head { padding: 0; color: var(--content_default, #202124); font: inherit; text-align: start; }
+      #${AVOID_ID} .wlmrt-unpaved .wz-react-dropdown__head { padding: 0; color: var(--content_default, #202124); font: inherit; text-align: start; }
       #${AVOID_ID} .wz-react-dropdown__head:focus-visible { outline: 2px solid var(--primary, #0099ff); outline-offset: 3px; border-radius: 3px; }
-      .wvi-avoid-menu { box-sizing: border-box; max-width: calc(100vw - 16px); color: var(--content_default, #202124); }
-      .wvi-avoid-menu .wz-react-dropdown__list { min-width: min(240px, calc(100vw - 16px)); font-size: inherit; }
-      .wvi-avoid-menu .wz-react-dropdown__option { font-size: inherit; outline: none; }
-      .wvi-avoid-menu .wz-react-dropdown__option:focus { background-color: rgba(0, 0, 0, .04); }
+      .wlmrt-avoid-menu { box-sizing: border-box; max-width: calc(100vw - 16px); color: var(--content_default, #202124); }
+      .wlmrt-avoid-menu .wz-react-dropdown__list { min-width: min(240px, calc(100vw - 16px)); font-size: inherit; }
+      .wlmrt-avoid-menu .wz-react-dropdown__option { font-size: inherit; outline: none; }
+      .wlmrt-avoid-menu .wz-react-dropdown__option:focus { background-color: rgba(0, 0, 0, .04); }
       #${AVOID_ID} [hidden] { display: none; }
-      .wz-search-suggestions:not(:empty) ~ .wm-routing__scrollable #${AVOID_ID} { display: none; }
+      .wz-search-suggestions:not(:empty) ~ #${AVOID_ID} { display: none; }
     `;
     (document.head || document.documentElement).append(style);
   }
@@ -368,7 +405,7 @@
     head.setAttribute('aria-haspopup', 'listbox');
     head.setAttribute('aria-expanded', 'false');
     const menu = document.createElement('div');
-    menu.className = 'wz-react-dropdown__list-container wvi-avoid-menu';
+    menu.className = 'wz-react-dropdown__list-container wlmrt-avoid-menu';
     const list = document.createElement('div');
     list.className = 'wz-react-dropdown__list';
     list.id = `${AVOID_ID}-unpaved-menu`;
@@ -481,9 +518,16 @@
     };
   }
 
+  function createWazeIcon(name) {
+    const icon = document.createElement('i');
+    icon.className = `w-icon w-icon-${name}`;
+    icon.setAttribute('aria-hidden', 'true');
+    return icon;
+  }
+
   function mountAvoids() {
-    const schedule = document.querySelector('.wm-routing-schedule.wm-routing__reducer');
-    if (!schedule) return;
+    const suggestions = document.getElementById('search-suggestions');
+    if (!suggestions) return;
     if (!customElements.get('wz-checkbox')) return;
     let panel = document.getElementById(AVOID_ID);
     if (!panel) {
@@ -498,7 +542,7 @@
       const fieldset = document.createElement('fieldset');
       fieldset.setAttribute('aria-label', t('avoid'));
       const grid = document.createElement('div');
-      grid.className = 'wvi-avoid-grid';
+      grid.className = 'wlmrt-avoid-grid';
       for (const [index, key] of ['tolls', 'ferries', 'freeways', 'difficult'].entries()) {
         const input = document.createElement('wz-checkbox');
         input.dataset.avoid = avoidFlags[index];
@@ -514,7 +558,7 @@
       fieldset.append(grid);
       panel.append(fieldset);
       const label = document.createElement('div');
-      label.className = 'wvi-unpaved';
+      label.className = 'wlmrt-unpaved';
       const text = document.createElement('span');
       text.dataset.i18n = 'unpaved';
       text.id = `${AVOID_ID}-unpaved-label`;
@@ -522,12 +566,8 @@
       label.append(text, unpavedControl.element);
       panel.append(label);
     }
-    if (schedule.previousElementSibling !== panel) schedule.before(panel);
-    if (
-      panel
-        .closest('.wm-routing__scrollable')
-        ?.matches('.wz-search-suggestions:not(:empty) ~ .wm-routing__scrollable')
-    ) {
+    if (suggestions.nextElementSibling !== panel) suggestions.after(panel);
+    if (panel.matches('.wz-search-suggestions:not(:empty) ~ #' + AVOID_ID)) {
       unpavedControl?.close();
     }
     for (const node of panel.querySelectorAll('[data-i18n]')) {
@@ -543,6 +583,181 @@
     unpavedControl.update(selected.unpaved);
   }
 
+  // Read the committed component's route, never pair cards by their list index.
+  function cardRoute(card, committedTrees) {
+    const key = Object.keys(card).find((name) => name.startsWith('__reactFiber$'));
+    let fiber = key && card[key];
+    if (!fiber) return null;
+    let root = fiber;
+    while (root.return) root = root.return;
+    if (root.stateNode?.current) {
+      const currentRoot = root.stateNode.current;
+      let nodes = committedTrees.get(currentRoot);
+      if (!nodes) {
+        nodes = new Map();
+        const stack = [currentRoot];
+        let count = 0;
+        while (stack.length && count++ < 20000) {
+          const node = stack.pop();
+          if (node.stateNode instanceof HTMLElement) nodes.set(node.stateNode, node);
+          if (node.sibling) stack.push(node.sibling);
+          if (node.child) stack.push(node.child);
+        }
+        committedTrees.set(currentRoot, nodes);
+      }
+      fiber = nodes.get(card);
+    }
+    for (; fiber; fiber = fiber.return) {
+      const route = fiber.memoizedProps?.route?.raw;
+      if (route) return route;
+      if (fiber.stateNode instanceof HTMLElement && fiber.stateNode !== card) break;
+    }
+    return null;
+  }
+
+  const tollFormatWarnings = new WeakMap();
+  function routeChips(route) {
+    const chips = [];
+    if (!route) return chips;
+    let number;
+    try {
+      number = new Intl.NumberFormat(normalizeLocale(locale));
+    } catch {
+      number = new Intl.NumberFormat('en');
+    }
+    const price = route.tollPriceInfo;
+    if (
+      route.isToll === true &&
+      typeof price?.tollPrice === 'number' &&
+      Number.isFinite(price.tollPrice) &&
+      price.tollPrice >= 0 &&
+      typeof price.tollPriceCurrencyCode === 'string' &&
+      /^[A-Z]{3}$/.test(price.tollPriceCurrencyCode)
+    ) {
+      try {
+        const formatted = new Intl.NumberFormat(number.resolvedOptions().locale, {
+          style: 'currency',
+          currency: price.tollPriceCurrencyCode,
+          currencyDisplay: 'symbol',
+        }).format(price.tollPrice);
+        tollFormatWarnings.delete(route);
+        chips.push(['', `${t('tolls')}: ${formatted}`]);
+      } catch (error) {
+        const signature = JSON.stringify([locale, price.tollPrice, price.tollPriceCurrencyCode]);
+        if (tollFormatWarnings.get(route) !== signature) {
+          tollFormatWarnings.set(route, signature);
+          console.warn('[Waze Live Map Route Toolkit] Cannot format toll price', error);
+        }
+      }
+    }
+    const attributes = route.routeAttr;
+    for (const [attribute, key] of [
+      ['FERRY', 'ferries'],
+      ['UNPAVED', 'unpaved'],
+    ]) {
+      if (
+        (Array.isArray(attributes) && attributes.includes(attribute)) ||
+        (attributes instanceof Set && attributes.has(attribute))
+      ) {
+        chips.push(['', t(key), key === 'ferries' ? 'avoid-ferries' : 'unpaved']);
+      }
+    }
+    if (Array.isArray(route.jams) && route.jams.length) {
+      const jams = [
+        ...new Map(
+          route.jams
+            .filter((jam) => jam && typeof jam === 'object')
+            .map((jam) => [jam.id ?? jam, jam])
+        ).values(),
+      ];
+      const levels = ['moderate', 'heavy', 'bumperToBumper'];
+      // Observed user-drive statuses; do not extrapolate other severity values.
+      // Other severities remain generic; no road closure is inferred.
+      const counts = new Map();
+      for (const jam of jams) {
+        const level = Number.isInteger(jam.severity) ? levels[jam.severity] : undefined;
+        const key = level || 'unknown';
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      for (const level of [...levels, 'unknown']) {
+        const count = counts.get(level);
+        if (!count) continue;
+        const label = level === 'unknown' ? t('traffic') : t(`trafficLevels.${level}`);
+        chips.push([`wlmrt-traffic wlmrt-traffic--${level}`, `${label} ×${number.format(count)}`]);
+      }
+    }
+    return chips;
+  }
+
+  function mountAverageSpeed(footer, route) {
+    const previous = footer.querySelector('.wlmrt-average-speed');
+    if (
+      !route ||
+      !Number.isFinite(route.meters) ||
+      route.meters < 0 ||
+      !Number.isFinite(route.seconds) ||
+      route.seconds <= 0
+    ) {
+      previous?.remove();
+      return;
+    }
+    const speed = (route.meters / route.seconds) * (route.isImperial ? 3600 / 1609.344 : 3.6);
+    if (!Number.isFinite(speed)) {
+      previous?.remove();
+      return;
+    }
+    let formatter;
+    try {
+      formatter = new Intl.NumberFormat(normalizeLocale(locale), { maximumFractionDigits: 1 });
+    } catch {
+      formatter = new Intl.NumberFormat('en', { maximumFractionDigits: 1 });
+    }
+    const text = `${t('averageSpeed')}: ${formatter.format(speed)} ${route.isImperial ? 'mph' : 'km/h'}`;
+    if (previous?.textContent === text && footer.lastChild === previous) return;
+    const node = previous || document.createElement('span');
+    node.className = 'wlmrt-average-speed';
+    if (node.textContent !== text) node.textContent = text;
+    footer.append(node);
+  }
+
+  function mountRouteChips() {
+    // Share each committed root lookup across cards, only for this mount.
+    const committedTrees = new Map();
+    for (const card of document.querySelectorAll('.wm-routes-item-desktop')) {
+      const details = card.querySelector('.wm-routes-item-desktop__details');
+      const footer = details?.querySelector('.wm-routes-item-desktop__footer');
+      const previous = details?.querySelector('.wlmrt-route-badges');
+      const route = cardRoute(card, committedTrees);
+      if (footer) mountAverageSpeed(footer, route);
+      const chips = routeChips(route);
+      if (!footer || !chips.length) {
+        previous?.remove();
+        continue;
+      }
+      const signature = JSON.stringify(chips);
+      if (previous?.dataset.signature === signature && footer.nextElementSibling === previous)
+        continue;
+      const list = document.createElement('ul');
+      list.className = 'wm-routing-badges wlmrt-route-badges';
+      list.dataset.signature = signature;
+      for (const [kind, text, icon] of chips) {
+        const chip = document.createElement('li');
+        chip.className = ['wm-routing-badges__item', kind].filter(Boolean).join(' ');
+        if (icon) chip.append(createWazeIcon(icon));
+        if (kind.startsWith('wlmrt-traffic ')) {
+          const dot = document.createElement('span');
+          dot.className = 'wlmrt-traffic-dot';
+          dot.setAttribute('aria-hidden', 'true');
+          chip.append(dot);
+        }
+        chip.append(document.createTextNode(text));
+        list.append(chip);
+      }
+      previous?.remove();
+      footer.after(list);
+    }
+  }
+
   function mount() {
     // Wait for Waze to render its routing panel before attaching the controls.
     const title = document.querySelector('.wm-routing__title');
@@ -552,6 +767,7 @@
     }
     readTranslations();
     addStyle();
+    mountRouteChips();
     let row = document.getElementById(ID);
     if (!row) {
       row = document.createElement('div');
@@ -566,7 +782,7 @@
         button.title = name;
         button.setAttribute('aria-label', name);
         const icon = document.createElement('span');
-        icon.className = 'wvi-icon';
+        icon.className = 'wlmrt-icon';
         const glyph = document.createElement('i');
         glyph.className = `w-icon w-icon-${vehicle.icon}`;
         glyph.setAttribute('aria-hidden', 'true');

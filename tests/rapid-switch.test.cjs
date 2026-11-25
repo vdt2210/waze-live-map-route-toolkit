@@ -203,6 +203,6 @@ function setup(initialURL, translations) {
     assert.equal(navigating.api.state().active, undefined);
   }
   assert.ok(!/button\.disabled|aria-busy|cursor:\s*wait|let busy/.test(source));
-  assert.match(source, /@version\s+1\.1\.0\s/);
-  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled buttons, slow success, native errors, navigation, version 1.1.0.');
+  assert.match(source, /@version\s+1\.2\.0\s/);
+  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled buttons, slow success, native errors, navigation, version 1.2.0.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
