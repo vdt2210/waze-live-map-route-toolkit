@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Waze Live Map Route Toolkit
 // @namespace      https://greasyfork.org/en/users/1603731-vdt2210
-// @version        1.2.0
+// @version        1.2.1
 // @author         vdt2210
 // @description    Select a vehicle and avoid tolls, ferries, freeways, difficult turns, or unpaved roads on Waze Map.
 // @description:vi Chọn phương tiện và tùy chọn tránh thu phí, phà, cao tốc, rẽ khó, đường chưa trải nhựa trên Waze Map.
@@ -333,7 +333,6 @@
       .wm-routes-item-desktop__footer:has(> .wlmrt-average-speed) { flex-wrap: wrap; }
       .wlmrt-average-speed { display: block; flex-basis: 100%; width: 100%; }
       .wlmrt-route-badges .wm-routing-badges__item { white-space: normal; overflow-wrap: anywhere; max-width: 100%; padding: 2px 6px; }
-      .wlmrt-route-badges .w-icon { margin-inline-end: 4px; vertical-align: middle; }
       .wlmrt-route-badges .wlmrt-traffic { --wlmrt-traffic-color: #ffc400; }
       .wlmrt-route-badges .wlmrt-traffic--light { --wlmrt-traffic-color: #ffc400; }
       .wlmrt-route-badges .wlmrt-traffic--moderate { --wlmrt-traffic-color: #ffa600; }
@@ -518,13 +517,6 @@
     };
   }
 
-  function createWazeIcon(name) {
-    const icon = document.createElement('i');
-    icon.className = `w-icon w-icon-${name}`;
-    icon.setAttribute('aria-hidden', 'true');
-    return icon;
-  }
-
   function mountAvoids() {
     const suggestions = document.getElementById('search-suggestions');
     if (!suggestions) return;
@@ -659,7 +651,7 @@
         (Array.isArray(attributes) && attributes.includes(attribute)) ||
         (attributes instanceof Set && attributes.has(attribute))
       ) {
-        chips.push(['', t(key), key === 'ferries' ? 'avoid-ferries' : 'unpaved']);
+        chips.push(['', t(key)]);
       }
     }
     if (Array.isArray(route.jams) && route.jams.length) {
@@ -740,10 +732,9 @@
       const list = document.createElement('ul');
       list.className = 'wm-routing-badges wlmrt-route-badges';
       list.dataset.signature = signature;
-      for (const [kind, text, icon] of chips) {
+      for (const [kind, text] of chips) {
         const chip = document.createElement('li');
         chip.className = ['wm-routing-badges__item', kind].filter(Boolean).join(' ');
-        if (icon) chip.append(createWazeIcon(icon));
         if (kind.startsWith('wlmrt-traffic ')) {
           const dot = document.createElement('span');
           dot.className = 'wlmrt-traffic-dot';
