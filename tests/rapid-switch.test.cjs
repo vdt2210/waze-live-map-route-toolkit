@@ -45,7 +45,7 @@ function setup(initialURL, translations) {
   vm.runInNewContext(prefix + `
     routeBridge = bridge;
     mount = () => {};
-    globalThis.test = { selectVehicle, selectAvoid, selectedAvoids, routeOptions, t, state: () => ({ failed, requestSequence, active: activeRequest?.id }) };
+    globalThis.test = { updateRoute, selectVehicle, selectAvoid, selectedAvoids, routeOptions, t, state: () => ({ failed, requestSequence, active: activeRequest?.id }) };
   })();`, context);
   return {
     api: context.test, requests, location,
@@ -202,7 +202,19 @@ function setup(initialURL, translations) {
     await navigation;
     assert.equal(navigating.api.state().active, undefined);
   }
-  assert.ok(!/button\.disabled|aria-busy|cursor:\s*wait|let busy/.test(source));
-  assert.match(source, /@version\s+1\.2\.0\s/);
-  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled buttons, slow success, native errors, navigation, version 1.2.0.');
+  const refresh = setup();
+  const originalURL = refresh.location.href;
+  const refreshing = refresh.api.updateRoute(() => {}, true);
+  assert.equal(refresh.requests.length, 1, 'refresh must request routes even when the URL is unchanged');
+  assert.equal(refresh.location.href, originalURL);
+  refresh.requests[0].complete();
+  await refresh.tick();
+  await refreshing;
+  assert.equal(refresh.api.state().active, undefined);
+  await refresh.api.selectVehicle('PRIVATE');
+  assert.equal(refresh.requests.length, 1, 'ordinary selection still skips unchanged routes');
+  const vehicleMount = source.slice(source.indexOf('  function mount()'), source.indexOf('  // Waze mounts and replaces'));
+  assert.ok(!/button\.disabled|aria-busy|cursor:\s*wait|let busy/.test(vehicleMount));
+  assert.match(source, /@version\s+1\.2\.1\s/);
+  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled vehicle buttons, refresh, slow success, native errors, navigation, version 1.2.1.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

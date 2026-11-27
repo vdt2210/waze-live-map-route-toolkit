@@ -28,9 +28,11 @@ A successful run prints a `PASS:` message for each test file and exits with code
 - Slow successful requests and genuine routing failures.
 - Closing the directions panel or changing the destination during a request.
 - Avoid settings, unpaved-road defaults and overrides, preservation of unknown route options, and translation fallback.
-- The expected script version (`1.2.0`).
+- The expected script version (`1.2.1`).
 
 [`avoid-ui.test.cjs`](./avoid-ui.test.cjs) checks the Avoid panel, checkbox and dropdown interaction, keyboard navigation, translations, URL state, remounting, and missing route bridge behavior in `jsdom`.
+
+It also checks the refresh button's native tooltip adapter using real React/ReactDOM and a contract double for Waze's tooltip/runtime in [`native-tooltip-runtime.cjs`](./native-tooltip-runtime.cjs). This covers delayed runtime availability, discovery without fixed module IDs, native component props, portal cleanup on loading and unmount, header replacement, and hiding the results container while Waze shows loading. These dependencies are only used by tests; the userscript uses Waze's own React runtime.
 
 ## Limits and manual checks
 

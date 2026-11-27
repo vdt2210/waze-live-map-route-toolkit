@@ -18,6 +18,7 @@
     en: {
       vehicles: { PRIVATE: 'Car', MOTORCYCLE: 'Motorcycle', TAXI: 'Taxi' },
       vehicleType: 'Vehicle type',
+      refresh: 'Refresh',
       avoid: 'Avoid',
       tolls: 'Tolls',
       ferries: 'Ferries',
@@ -39,6 +40,7 @@
     vi: {
       vehicles: { PRIVATE: 'Ô tô', MOTORCYCLE: 'Xe máy', TAXI: 'Taxi' },
       vehicleType: 'Chọn phương tiện',
+      refresh: 'Làm mới',
       avoid: 'Tránh',
       tolls: 'Thu phí',
       ferries: 'Phà',
@@ -60,6 +62,7 @@
   };
   const ID = 'waze-vehicle-icons';
   const AVOID_ID = 'waze-route-avoids';
+  const REFRESH_ID = 'waze-route-refresh';
   const STYLE_ID = `${ID}-style`;
   const PARAM = 'rp_vehicleType';
   const vehicles = [
@@ -120,6 +123,7 @@
   let activeRequest = null;
   let failed = false;
   let unpavedControl = null;
+  let refreshControl = null;
 
   function samePoint(a, b) {
     return a && b && a.lat === b.lat && a.lng === b.lng;
@@ -256,11 +260,11 @@
     });
   }
 
-  async function updateRoute(change) {
+  async function updateRoute(change, force = false) {
     const url = new URL(location.href);
     const oldURL = url.href;
     change(url);
-    if (url.href === oldURL && !failed) return;
+    if (url.href === oldURL && !failed && !force) return;
     const requestId = ++requestSequence;
     // Keep our own reference: React may replace the effect between rapid clicks.
     const previousCancel = activeRequest?.cancel;
@@ -292,6 +296,7 @@
       const cancel = bridge.effect.create();
       holder.destroy = cancel;
       activeRequest = { id: requestId, cancel };
+      mount();
       // Let Waze own the network timeout. A slow request is not a script error.
       while (requestId === requestSequence) {
         await new Promise((resolve) => setTimeout(resolve, 150));
@@ -329,6 +334,9 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
+      .wm-routes__header:has(> #${REFRESH_ID}-host) { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      #${REFRESH_ID} .w-icon { display: inline-block; font-size: 20px; }
+      .wm-routing__scrollable:has(> .wm-routing-status:not(.wm-routing-status--mobile)) > .wm-routes { display: none; }
       .wlmrt-route-badges { display: flex; flex-wrap: wrap; margin-top: 6px; }
       .wm-routes-item-desktop__footer:has(> .wlmrt-average-speed) { flex-wrap: wrap; }
       .wlmrt-average-speed { display: block; flex-basis: 100%; width: 100%; }
@@ -749,15 +757,163 @@
     }
   }
 
+  let tooltipRuntime = null;
+  let wazeRequire = null;
+  let tooltipModuleCount = -1;
+  let tooltipModules = null;
+  let tooltipWarning = false;
+
+  function nativeTooltipRuntime() {
+    if (tooltipRuntime) return tooltipRuntime;
+    const save = document.querySelector('[data-hook="SAVE_TO_APP_BUTTON"]');
+    const fiberKey = save && Object.keys(save).find((key) => key.startsWith('__reactFiber$'));
+    let Tooltip = null;
+    let fiber = fiberKey && save[fiberKey];
+    for (let depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+      const props = fiber.memoizedProps;
+      if (
+        typeof fiber.type === 'function' &&
+        typeof props?.text === 'string' &&
+        props.children?.props?.['data-hook'] === 'SAVE_TO_APP_BUTTON' &&
+        props.placement === 'top'
+      ) {
+        Tooltip = fiber.type;
+        break;
+      }
+    }
+    if (!Tooltip) return null;
+    try {
+      // Capture Waze's existing webpack runtime; do not load another React copy.
+      if (!wazeRequire) {
+        const chunks = window.webpackChunklivemap;
+        if (!Array.isArray(chunks)) return null;
+        const token = `wlmrt-tooltip-${Date.now()}`;
+        chunks.push([
+          [token],
+          {},
+          (require) => {
+            wazeRequire = require;
+          },
+        ]);
+      }
+      if (!wazeRequire?.m) return null;
+      const factories = Object.entries(wazeRequire.m);
+      if (tooltipModuleCount !== factories.length) {
+        tooltipModuleCount = factories.length;
+        tooltipModules = null;
+        let React = null;
+        let renderer = null;
+        for (const [id, factory] of factories) {
+          const source = Function.prototype.toString.call(factory);
+          // Inspect only factories advertising the required APIs, then validate.
+          if (!React && /\.createElement\s*=/.test(source) && /\.useState\s*=/.test(source)) {
+            const candidate = wazeRequire(id);
+            if (
+              typeof candidate.createElement === 'function' &&
+              typeof candidate.useState === 'function'
+            )
+              React = candidate;
+          }
+          if (!renderer && /\.createRoot\s*=/.test(source) && /\.hydrateRoot\s*=/.test(source)) {
+            const candidate = wazeRequire(id);
+            if (typeof candidate.createRoot === 'function') renderer = candidate;
+          }
+          if (React && renderer) break;
+        }
+        if (React && renderer) tooltipModules = { React, createRoot: renderer.createRoot };
+      }
+      if (tooltipModules) tooltipRuntime = { ...tooltipModules, Tooltip };
+    } catch (error) {
+      if (!tooltipWarning) {
+        tooltipWarning = true;
+        console.warn('[Waze Live Map Route Toolkit] Cannot access Waze tooltip', error);
+      }
+    }
+    return tooltipRuntime;
+  }
+
+  function unmountRefresh() {
+    if (!refreshControl) return;
+    refreshControl.root.unmount();
+    refreshControl.host.remove();
+    refreshControl = null;
+  }
+
+  function mountRefresh() {
+    const title = document.querySelector(
+      '.wm-routes__header.wm-routing__reducer .wm-routes__title'
+    );
+    if (!title) {
+      unmountRefresh();
+      return;
+    }
+    const runtime = nativeTooltipRuntime();
+    if (!runtime) return;
+    if (!refreshControl) {
+      const host = document.createElement('div');
+      host.id = `${REFRESH_ID}-host`;
+      const root = runtime.createRoot(host);
+      // Forward keyboard focus/Escape to the native hover trigger as well.
+      const hover = (enter) => {
+        host.firstElementChild?.dispatchEvent(
+          new MouseEvent(enter ? 'mouseover' : 'mouseout', {
+            bubbles: true,
+            relatedTarget: enter ? null : document.body,
+          })
+        );
+      };
+      host.addEventListener('focusin', () => hover(true));
+      host.addEventListener('focusout', () => hover(false));
+      host.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hover(false);
+      });
+      refreshControl = { host, root, signature: null };
+    }
+    const { host, root } = refreshControl;
+    if (title.nextElementSibling !== host) title.after(host);
+    const label = t('refresh');
+    const bridge = routeBridge();
+    const busy = Boolean(activeRequest) || Boolean(bridge?.routing.locked);
+    const disabled = busy || !bridge;
+    const signature = JSON.stringify([label, busy, disabled]);
+    if (refreshControl.signature === signature) return;
+    refreshControl.signature = signature;
+    const { React, Tooltip } = runtime;
+    const button = React.createElement(
+      'wz-button',
+      {
+        id: REFRESH_ID,
+        type: 'button',
+        color: 'secondary',
+        size: 'sm',
+        disabled,
+        'aria-label': label,
+        'aria-busy': String(busy),
+        onClick: () => {
+          if (!disabled && !activeRequest) updateRoute(() => {}, true);
+        },
+      },
+      React.createElement('i', { className: 'w-icon w-icon-refresh', 'aria-hidden': 'true' })
+    );
+    // Removing the native tooltip while busy also cleans up its portal/observers.
+    root.render(
+      disabled
+        ? button
+        : React.createElement(Tooltip, { text: label, placement: 'top', delayMs: 400 }, button)
+    );
+  }
+
   function mount() {
     // Wait for Waze to render its routing panel before attaching the controls.
     const title = document.querySelector('.wm-routing__title');
     if (!title) {
       unpavedControl?.close();
+      unmountRefresh();
       return;
     }
     readTranslations();
     addStyle();
+    mountRefresh();
     mountRouteChips();
     let row = document.getElementById(ID);
     if (!row) {
