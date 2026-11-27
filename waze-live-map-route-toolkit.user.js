@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name           Waze Live Map Route Toolkit
 // @namespace      https://greasyfork.org/en/users/1603731-vdt2210
-// @version        1.2.1
+// @version        1.2.2
 // @author         vdt2210
 // @description    Select a vehicle and avoid tolls, ferries, freeways, difficult turns, or unpaved roads on Waze Map.
 // @description:vi Chọn phương tiện và tùy chọn tránh thu phí, phà, cao tốc, rẽ khó, đường chưa trải nhựa trên Waze Map.
@@ -18,6 +18,14 @@
     en: {
       vehicles: { PRIVATE: 'Car', MOTORCYCLE: 'Motorcycle', TAXI: 'Taxi' },
       vehicleType: 'Vehicle type',
+      clearRoute: 'Clear all and exit directions',
+      refreshRoute: 'Refresh route',
+      refreshMap: 'Refresh map',
+      refreshFailed: 'Failed to refresh',
+      refreshCancelled: 'Refresh interrupted by changes. Retry',
+      retry: 'Retry',
+      refreshParts: { tiles: 'map tiles', data: 'traffic data', route: 'route' },
+      zoomLevel: 'Zoom level',
       avoid: 'Avoid',
       tolls: 'Tolls',
       ferries: 'Ferries',
@@ -39,6 +47,14 @@
     vi: {
       vehicles: { PRIVATE: 'Ô tô', MOTORCYCLE: 'Xe máy', TAXI: 'Taxi' },
       vehicleType: 'Chọn phương tiện',
+      clearRoute: 'Xóa tất cả và thoát tìm đường',
+      refreshRoute: 'Làm mới tuyến đường',
+      refreshMap: 'Làm mới bản đồ',
+      refreshFailed: 'Không thể làm mới',
+      refreshCancelled: 'Lần làm mới bị gián đoạn do thay đổi. Thử lại',
+      retry: 'Thử lại',
+      refreshParts: { tiles: 'tile bản đồ', data: 'dữ liệu giao thông', route: 'tuyến đường' },
+      zoomLevel: 'Mức thu phóng',
       avoid: 'Tránh',
       tolls: 'Thu phí',
       ferries: 'Phà',
@@ -60,6 +76,11 @@
   };
   const ID = 'waze-vehicle-icons';
   const AVOID_ID = 'waze-route-avoids';
+  const REFRESH_ID = 'waze-route-refresh';
+  const CLEAR_ID = 'waze-route-clear';
+  const MAP_REFRESH_ID = 'waze-map-refresh';
+  const ZOOM_VALUE_ID = 'waze-map-zoom-value';
+  const MAX_MAP_ZOOM = 19;
   const STYLE_ID = `${ID}-style`;
   const PARAM = 'rp_vehicleType';
   const vehicles = [
@@ -120,6 +141,59 @@
   let activeRequest = null;
   let failed = false;
   let unpavedControl = null;
+  let refreshControl = null;
+  let vehicleControl = null;
+  let clearControl = null;
+  let clearingRoute = false;
+
+  function hasDirections() {
+    return Boolean(document.querySelector('.wm-cards.is-destination.with-routing'));
+  }
+
+  async function waitForNative(check) {
+    for (let frame = 0; frame < 60; frame++) {
+      const result = check();
+      if (result) return result;
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    throw new Error('Waze search controls did not update');
+  }
+
+  async function clearRoute() {
+    if (clearingRoute || !hasDirections()) return;
+    clearingRoute = true;
+    ++requestSequence;
+    const cancel = activeRequest?.cancel;
+    activeRequest = null;
+    failed = false;
+    scheduleMount(false);
+    try {
+      try {
+        if (typeof cancel === 'function') cancel();
+      } catch (error) {
+        console.warn('[Waze Live Map Route Toolkit] Cannot cancel route request', error);
+      }
+      // Waze owns endpoint, URL, marker and route updates through its controls.
+      for (const endpoint of ['origin', 'destination']) {
+        const selector = `.wz-search-container.is-${endpoint} .wm-search`;
+        const search = document.querySelector(selector);
+        if (!search) throw new Error('Waze search control is unavailable');
+        search.querySelector('.wm-search__selected')?.click();
+        const clear = await waitForNative(() =>
+          document.querySelector(`${selector} .wm-search__clear-icon[role="button"]`)
+        );
+        clear.click();
+        const param = endpoint === 'origin' ? 'from' : 'to';
+        await waitForNative(() => !new URL(location.href).searchParams.has(param));
+      }
+      document.querySelector('.wz-search-container.is-destination .wm-search__input')?.blur();
+    } catch (error) {
+      console.warn('[Waze Live Map Route Toolkit] Cannot clear directions', error);
+    } finally {
+      clearingRoute = false;
+      scheduleMount();
+    }
+  }
 
   function samePoint(a, b) {
     return a && b && a.lat === b.lat && a.lng === b.lng;
@@ -256,32 +330,29 @@
     });
   }
 
-  async function updateRoute(change) {
+  async function updateRoute(change, force = false) {
+    if (clearingRoute) return null;
     const url = new URL(location.href);
     const oldURL = url.href;
     change(url);
-    if (url.href === oldURL && !failed) return;
+    if (url.href === oldURL && !failed && !force) return true;
     const requestId = ++requestSequence;
     // Keep our own reference: React may replace the effect between rapid clicks.
     const previousCancel = activeRequest?.cancel;
     activeRequest = null;
-    if (typeof previousCancel === 'function') previousCancel();
-    const bridge = routeBridge();
-    const hasRoute = url.searchParams.has('from') && url.searchParams.has('to');
-    if (hasRoute && !bridge) {
-      failed = true;
-      mount();
-      return;
-    }
     failed = false;
     let started = false;
     try {
-      history.replaceState(history.state, '', url.href);
-      if (!bridge) {
-        mount();
-        return;
+      // If native cleanup fails, do not start a competing native request.
+      if (typeof previousCancel === 'function') previousCancel();
+      const bridge = routeBridge();
+      const hasRoute = url.searchParams.has('from') && url.searchParams.has('to');
+      if (hasRoute && !bridge) {
+        failed = true;
+        return false;
       }
-      mount();
+      history.replaceState(history.state, '', url.href);
+      if (!bridge) return null;
       // Reuse Waze's request, response parsing, loading state and map rendering.
       // Its existing cleanup cancels the old request, including on unmount.
       const holder = bridge.effect.inst || bridge.effect;
@@ -292,11 +363,12 @@
       const cancel = bridge.effect.create();
       holder.destroy = cancel;
       activeRequest = { id: requestId, cancel };
+      scheduleMount(false);
       // Let Waze own the network timeout. A slow request is not a script error.
       while (requestId === requestSequence) {
         await new Promise((resolve) => setTimeout(resolve, 150));
         // Superseded requests must not mark a newer request failed.
-        if (requestId !== requestSequence) return;
+        if (requestId !== requestSequence) return null;
         const current = routeBridge()?.routing;
         // Waze cleans up its request when the panel unmounts or endpoints change.
         if (
@@ -304,22 +376,24 @@
           !samePoint(current.from?.latLng, bridge.routing.from?.latLng) ||
           !samePoint(current.to?.latLng, bridge.routing.to?.latLng)
         )
-          return;
+          return null;
         if (current.error) throw new Error('Waze could not calculate this route');
         if (!current.locked && Array.isArray(current.routes) && current.routes !== before) {
-          return;
+          return true;
         }
       }
+      return null;
     } catch (error) {
-      if (requestId !== requestSequence) return;
+      if (requestId !== requestSequence) return null;
       failed = true;
       // Keep the chosen URL on request errors so clicking the same icon retries.
       if (!started) history.replaceState(history.state, '', oldURL);
       console.warn('[Waze Live Map Route Toolkit]', error);
+      return false;
     } finally {
       if (requestId === requestSequence) {
         if (activeRequest?.id === requestId) activeRequest = null;
-        mount();
+        scheduleMount(started);
       }
     }
   }
@@ -329,6 +403,26 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
+      #${CLEAR_ID}-host {
+        grid-column: 3; grid-row: 1; align-self: center; justify-self: center;
+        display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+      }
+      #${CLEAR_ID} { flex: none; }
+      .wz-desktop-controls[data-wlmrt-map-controls] {
+        bottom: calc(var(--wlmrt-controls-bottom) + var(--wlmrt-zoom-extra-height, 15px));
+      }
+      #${MAP_REFRESH_ID}-status {
+        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+      }
+      #${ZOOM_VALUE_ID} {
+        display: block; box-sizing: border-box; width: 100%; padding: 0;
+        text-align: center; font: 600 12px/1.2 Arial, sans-serif;
+        font-variant-numeric: tabular-nums; background: #fff; color: #202124;
+      }
+      .wm-routes__header:has(> #${REFRESH_ID}-host) { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      #${REFRESH_ID} .w-icon { display: inline-block; font-size: 20px; }
+      .wm-routing__scrollable:has(> .wm-routing-status:not(.wm-routing-status--mobile)) > .wm-routes { display: none; }
       .wlmrt-route-badges { display: flex; flex-wrap: wrap; margin-top: 6px; }
       .wm-routes-item-desktop__footer:has(> .wlmrt-average-speed) { flex-wrap: wrap; }
       .wlmrt-average-speed { display: block; flex-basis: 100%; width: 100%; }
@@ -348,23 +442,12 @@
         gap: 12px; padding: 0 20px 16px; flex: 0 0 auto;
         box-sizing: border-box; width: 100%; background: #fff; color: #202124;
       }
-      #${ID} button {
-        appearance: none; border: 0; background: transparent; color: inherit;
-        display: flex; align-items: center; justify-content: center;
-        padding: 0; margin: 0; min-width: 64px;
-        cursor: pointer; font: 12px/1.4 Arial, sans-serif;
+      #${ID} wz-button { min-width: 48px; }
+      #${ID} wz-button[aria-pressed="true"][disabled] {
+        --wz-button-disabled-background-color: var(--primary, #0099ff);
+        --wz-button-disabled-color: var(--on_primary, #fff);
+        --wz-button-cursor: default;
       }
-      #${ID} .wlmrt-icon {
-        display: flex; align-items: center; justify-content: center;
-        width: 56px; height: 34px; border-radius: 100px;
-        transition: background-color .15s ease, color .15s ease;
-      }
-      #${ID} button:hover .wlmrt-icon { background: #edf3f5; }
-      #${ID} button[aria-pressed="true"] .wlmrt-icon {
-        background-color: var(--wz-button-background-color, var(--primary, #0099ff));
-        color: var(--on_primary, #ffffff);
-      }
-      #${ID} button:focus-visible { outline: 2px solid var(--primary, #0099ff); outline-offset: 4px; border-radius: 8px; }
       #${ID} .w-icon { font-size: 24px; line-height: 1; }
       #${AVOID_ID} {
         box-sizing: border-box; width: 100%; padding: 0 20px 16px; flex: 0 0 auto;
@@ -392,7 +475,6 @@
   }
 
   function createUnpavedDropdown(labelId) {
-    unpavedControl?.destroy();
     const element = document.createElement('div');
     element.className = 'wz-react-dropdown';
     const head = document.createElement('button');
@@ -456,7 +538,7 @@
       head.classList.add('is-active');
       (last
         ? options.at(-1)
-        : options.find((option) => option.dataset.value === head.dataset.value) || options[0]
+        : options.find((option) => option.dataset.value === selectedAvoids().unpaved) || options[0]
       ).focus();
     }
     function outside(event) {
@@ -481,7 +563,7 @@
       }
     }
     function viewport(event) {
-      if (!menu.contains(event.target)) close();
+      if (!(event.target instanceof Node) || !menu.contains(event.target)) close();
     }
     head.addEventListener('click', () => (menu.isConnected ? close() : open()));
     head.addEventListener('keydown', (event) => {
@@ -517,10 +599,19 @@
     };
   }
 
+  function unmountAvoids() {
+    unpavedControl?.destroy();
+    unpavedControl = null;
+    document.getElementById(AVOID_ID)?.remove();
+  }
+
   function mountAvoids() {
     const suggestions = document.getElementById('search-suggestions');
-    if (!suggestions) return;
-    if (!customElements.get('wz-checkbox')) return;
+    if (!suggestions || !customElements.get('wz-checkbox')) {
+      unmountAvoids();
+      return;
+    }
+    if (unpavedControl && !unpavedControl.element.isConnected) unmountAvoids();
     let panel = document.getElementById(AVOID_ID);
     if (!panel) {
       panel = document.createElement('details');
@@ -749,63 +840,1040 @@
     }
   }
 
-  function mount() {
-    // Wait for Waze to render its routing panel before attaching the controls.
-    const title = document.querySelector('.wm-routing__title');
-    if (!title) {
-      unpavedControl?.close();
-      return;
+  let tooltipRuntime = null;
+  let wazeRequire = null;
+  let tooltipModuleCount = -1;
+  let tooltipModules = null;
+  let tooltipWarning = false;
+
+  function nativeTooltipRuntime() {
+    if (tooltipRuntime) return tooltipRuntime;
+    let Tooltip = null;
+    // Map controls exist even when no route is selected.
+    const anchors = document.querySelectorAll(
+      '[data-hook="SAVE_TO_APP_BUTTON"], .wz-map-control-container .wz-control-button'
+    );
+    for (const anchor of anchors) {
+      const fiberKey = Object.keys(anchor).find((key) => key.startsWith('__reactFiber$'));
+      let fiber = fiberKey && anchor[fiberKey];
+      for (let depth = 0; fiber && depth < 30; depth++, fiber = fiber.return) {
+        const props = fiber.memoizedProps;
+        const child = props?.children?.props;
+        if (
+          typeof fiber.type === 'function' &&
+          typeof props?.text === 'string' &&
+          ((child?.['data-hook'] === 'SAVE_TO_APP_BUTTON' && props.placement === 'top') ||
+            (child?.className?.split(' ').includes('wz-control-button') &&
+              props.placement === 'left'))
+        ) {
+          Tooltip = fiber.type;
+          break;
+        }
+      }
+      if (Tooltip) break;
     }
-    readTranslations();
-    addStyle();
-    mountRouteChips();
-    let row = document.getElementById(ID);
-    if (!row) {
-      row = document.createElement('div');
-      row.id = ID;
-      row.setAttribute('role', 'group');
-      row.setAttribute('aria-label', t('vehicleType'));
-      for (const vehicle of vehicles) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.dataset.vehicle = vehicle.type;
-        const name = t(`vehicles.${vehicle.type}`);
-        button.title = name;
-        button.setAttribute('aria-label', name);
-        const icon = document.createElement('span');
-        icon.className = 'wlmrt-icon';
-        const glyph = document.createElement('i');
-        glyph.className = `w-icon w-icon-${vehicle.icon}`;
-        glyph.setAttribute('aria-hidden', 'true');
-        icon.append(glyph);
-        button.append(icon);
-        button.addEventListener('click', () => selectVehicle(vehicle.type));
-        row.append(button);
+    if (!Tooltip) return null;
+    try {
+      // Capture Waze's existing webpack runtime; do not load another React copy.
+      if (!wazeRequire) {
+        const chunks = window.webpackChunklivemap;
+        if (!Array.isArray(chunks)) return null;
+        const token = `wlmrt-tooltip-${Date.now()}`;
+        chunks.push([
+          [token],
+          {},
+          (require) => {
+            wazeRequire = require;
+          },
+        ]);
+      }
+      if (!wazeRequire?.m) return null;
+      const factories = Object.entries(wazeRequire.m);
+      if (tooltipModuleCount !== factories.length) {
+        tooltipModuleCount = factories.length;
+        tooltipModules = null;
+        let React = null;
+        let renderer = null;
+        for (const [id, factory] of factories) {
+          const source = Function.prototype.toString.call(factory);
+          // Inspect only factories advertising the required APIs, then validate.
+          if (!React && /\.createElement\s*=/.test(source) && /\.useState\s*=/.test(source)) {
+            const candidate = wazeRequire(id);
+            if (
+              typeof candidate.createElement === 'function' &&
+              typeof candidate.useState === 'function'
+            )
+              React = candidate;
+          }
+          if (!renderer && /\.createRoot\s*=/.test(source) && /\.hydrateRoot\s*=/.test(source)) {
+            const candidate = wazeRequire(id);
+            if (typeof candidate.createRoot === 'function') renderer = candidate;
+          }
+          if (React && renderer) break;
+        }
+        if (React && renderer) tooltipModules = { React, createRoot: renderer.createRoot };
+      }
+      if (tooltipModules) tooltipRuntime = { ...tooltipModules, Tooltip };
+    } catch (error) {
+      if (!tooltipWarning) {
+        tooltipWarning = true;
+        console.warn('[Waze Live Map Route Toolkit] Cannot access Waze tooltip', error);
       }
     }
-    if (title.nextElementSibling !== row) title.after(row);
-    const selected = selectedType();
-    for (const button of row.querySelectorAll('button')) {
-      const pressed = String(button.dataset.vehicle === selected);
-      if (button.getAttribute('aria-pressed') !== pressed)
-        button.setAttribute('aria-pressed', pressed);
+    return tooltipRuntime;
+  }
+
+  function unmountRefresh() {
+    if (!refreshControl) return;
+    refreshControl.root.unmount();
+    refreshControl.host.remove();
+    refreshControl = null;
+  }
+
+  function mountRefresh() {
+    const title = document.querySelector(
+      '.wm-routes__header.wm-routing__reducer .wm-routes__title'
+    );
+    if (!title) {
+      unmountRefresh();
+      return;
     }
-    mountAvoids();
+    const runtime = nativeTooltipRuntime();
+    if (!runtime) return;
+    if (!refreshControl) {
+      const host = document.createElement('div');
+      host.id = `${REFRESH_ID}-host`;
+      const root = runtime.createRoot(host);
+      // Forward keyboard focus/Escape to the native hover trigger as well.
+      const hover = (enter) => {
+        host.firstElementChild?.dispatchEvent(
+          new MouseEvent(enter ? 'mouseover' : 'mouseout', {
+            bubbles: true,
+            relatedTarget: enter ? null : document.body,
+          })
+        );
+      };
+      host.addEventListener('focusin', () => hover(true));
+      host.addEventListener('focusout', () => hover(false));
+      host.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hover(false);
+      });
+      refreshControl = { host, root, signature: null };
+    }
+    const { host, root } = refreshControl;
+    if (title.nextElementSibling !== host) title.after(host);
+    const label = t('refreshRoute');
+    const bridge = routeBridge();
+    const busy = Boolean(activeRequest) || Boolean(bridge?.routing.locked);
+    const disabled = busy || !bridge;
+    const signature = JSON.stringify([label, busy, disabled]);
+    if (refreshControl.signature === signature) return;
+    refreshControl.signature = signature;
+    const { React, Tooltip } = runtime;
+    const button = React.createElement(
+      'wz-button',
+      {
+        id: REFRESH_ID,
+        type: 'button',
+        color: 'secondary',
+        size: 'sm',
+        disabled,
+        'aria-label': label,
+        'aria-busy': String(busy),
+        onClick: () => {
+          if (!disabled && !activeRequest) updateRoute(() => {}, true);
+        },
+      },
+      React.createElement(busy ? 'span' : 'i', {
+        className: busy ? 'wz-spinner' : 'w-icon w-icon-refresh',
+        'aria-hidden': 'true',
+      })
+    );
+    // Removing the native tooltip while busy also cleans up its portal/observers.
+    root.render(
+      disabled
+        ? button
+        : React.createElement(Tooltip, { text: label, placement: 'top', delayMs: 400 }, button)
+    );
+  }
+
+  let mapControl = null;
+
+  function mapBridge(anchor) {
+    const key = Object.keys(anchor).find((name) => name.startsWith('__reactFiber$'));
+    let fiber = key && anchor[key];
+    if (!fiber) return null;
+    let root = fiber;
+    while (root.return) root = root.return;
+    if (root.stateNode?.current) {
+      const stack = [root.stateNode.current];
+      fiber = null;
+      for (let count = 0; stack.length && count < 20000; count++) {
+        const node = stack.pop();
+        if (node.stateNode === anchor) {
+          fiber = node;
+          break;
+        }
+        if (node.sibling) stack.push(node.sibling);
+        if (node.child) stack.push(node.child);
+      }
+    }
+    const isMap = (value) =>
+      value &&
+      typeof value.getOLMap === 'function' &&
+      typeof value.getLayerByName === 'function' &&
+      typeof value.getZoom === 'function' &&
+      Number.isFinite(value.maxZoomLevel);
+    for (let depth = 0; fiber && depth < 80; depth++, fiber = fiber.return) {
+      if (isMap(fiber.memoizedProps?.value)) return fiber.memoizedProps.value;
+      for (let context = fiber.dependencies?.firstContext; context; context = context.next) {
+        if (isMap(context.memoizedValue)) return context.memoizedValue;
+      }
+    }
+    return null;
+  }
+
+  function findMapFiber(state, match) {
+    const key = Object.keys(state.recenter).find((name) => name.startsWith('__reactFiber$'));
+    let root = key && state.recenter[key];
+    if (!root) return null;
+    while (root.return) root = root.return;
+    const stack = [root.stateNode?.current || root];
+    for (let count = 0; stack.length && count < 20000; count++) {
+      const node = stack.pop();
+      const result = match(node);
+      if (result) return result;
+      if (node.sibling) stack.push(node.sibling);
+      if (node.child) stack.push(node.child);
+    }
+    return null;
+  }
+
+  function geoRssBridge(state) {
+    return findMapFiber(state, (node) => {
+      if (typeof node.type !== 'function') return null;
+      const source = Function.prototype.toString.call(node.type);
+      if (!source.includes('fetchGeoRssData') || !source.includes('Error rendering closures'))
+        return null;
+      let sequenceRef = null;
+      for (let hook = node.memoizedState; hook; hook = hook.next) {
+        if (!sequenceRef && Number.isFinite(hook.memoizedState?.current))
+          sequenceRef = hook.memoizedState;
+        const callback = Array.isArray(hook.memoizedState) && hook.memoizedState[0];
+        // Waze uses Underscore debounce: cancel() exists, flush() does not.
+        if (
+          typeof callback !== 'function' ||
+          typeof callback.cancel !== 'function' ||
+          !state.map.mapEventHandlers?.has(callback)
+        )
+          continue;
+        let closePopup = null;
+        const last = node.updateQueue?.lastEffect;
+        let effect = last?.next;
+        const seen = new Set();
+        while (effect && !seen.has(effect)) {
+          seen.add(effect);
+          if (
+            effect.deps?.[0] === state.map &&
+            effect.deps?.[1] === callback &&
+            typeof effect.deps[2] === 'function'
+          )
+            closePopup = effect.deps[2];
+          effect = effect.next;
+        }
+        return { refresh: callback, closePopup, sequenceRef };
+      }
+      return null;
+    });
+  }
+
+  let mapHttpClient = null;
+  function nativeMapHttpClient() {
+    if (mapHttpClient) return mapHttpClient;
+    for (const [id, factory] of Object.entries(wazeRequire?.m || {})) {
+      const source = Function.prototype.toString.call(factory);
+      if (!/\.AxiosHeaders\s*=/.test(source) || !/\.isAxiosError\s*=/.test(source)) continue;
+      const exports = wazeRequire(id);
+      const client = exports.default || exports;
+      if (
+        typeof client.get === 'function' &&
+        client.interceptors?.request?.use &&
+        client.interceptors?.request?.eject &&
+        client.interceptors?.response?.use &&
+        client.interceptors?.response?.eject
+      )
+        return (mapHttpClient = client);
+    }
+    return null;
+  }
+
+  async function refreshMapData(state, run) {
+    const bridge = geoRssBridge(state);
+    if (!bridge) throw new Error('Waze GeoRSS refresh is unavailable');
+    const client = nativeMapHttpClient();
+    if (!client) throw new Error('Waze GeoRSS request tracking is unavailable');
+    const controller = new AbortController();
+    const { promise: responseReady, resolve: complete } = Promise.withResolvers();
+    const nonce = `${Date.now()}-${run.id}`;
+    let request = null;
+    let sequence;
+    const cancel = () => {
+      controller.abort();
+      complete({ cancelled: true });
+    };
+    run.controller.signal.addEventListener('abort', cancel, { once: true });
+    // Moving the viewport supersedes this manual refresh. Leave Waze's next
+    // debounced background load untouched instead of borrowing that request.
+    state.ol.events.register('movestart', run, cancel);
+    const owns = (config) => config && (config === request || config.params?._wlmrt === nonce);
+    // Keep tracking until Waze's native debounce actually starts its request.
+    const requestId = client.interceptors.request.use((config) => {
+      if (
+        controller.signal.aborted ||
+        new URL(config.url, location.href).pathname !== '/live-map/api/georss' ||
+        request
+      )
+        return config;
+      request = config;
+      sequence = bridge.sequenceRef?.current;
+      config.params = { ...config.params, _wlmrt: nonce };
+      if (!config.timeout) config.timeout = 15000;
+      config.signal =
+        config.signal && typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([config.signal, controller.signal])
+          : config.signal || controller.signal;
+      // Axios already captured the current chain; subsequent calls stay native.
+      client.interceptors.request.eject(requestId);
+      return config;
+    });
+    const responseId = client.interceptors.response.use(
+      (value) => {
+        if (owns(value.config)) complete({ response: value });
+        return value;
+      },
+      (error) => {
+        if (owns(error.config)) complete({ error });
+        return Promise.reject(error);
+      }
+    );
+    const deadline = setTimeout(
+      () => complete({ error: new Error('Waze GeoRSS refresh timed out') }),
+      20000
+    );
+    const lowZoom =
+      state.map.getZoom() < 10
+        ? setTimeout(() => {
+            if (!request) complete({ skipped: true });
+          }, 1000)
+        : null;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearTimeout(deadline);
+      clearTimeout(lowZoom);
+      run.controller.signal.removeEventListener('abort', cancel);
+      state.ol.events.unregister('movestart', run, cancel);
+      client.interceptors.request.eject(requestId);
+      client.interceptors.response.eject(responseId);
+      controller.abort();
+    };
+    run.cleanups.add(cleanup);
+    try {
+      bridge.refresh();
+      const outcome = await responseReady;
+      if (outcome.cancelled || run.controller.signal.aborted || mapControl !== state)
+        return 'cancelled';
+      if (outcome.error) throw outcome.error;
+      if (outcome.skipped) return 'skipped';
+      // The HTTP interceptor runs before Waze parses and renders the response.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (controller.signal.aborted || mapControl !== state) return 'cancelled';
+      if (bridge.sequenceRef && sequence !== bridge.sequenceRef.current) return 'cancelled';
+      const { response } = outcome;
+      if (
+        !response ||
+        response.status < 200 ||
+        response.status >= 300 ||
+        !response.data ||
+        typeof response.data !== 'object' ||
+        Array.isArray(response.data)
+      ) {
+        throw new Error('Waze GeoRSS did not return map data');
+      }
+      // Popups contain snapshots. Close the old popup instead of showing stale details.
+      bridge.closePopup?.();
+      return 'ok';
+    } finally {
+      cleanup();
+      run.cleanups.delete(cleanup);
+    }
+  }
+
+  function sameRoute(a, b) {
+    return (
+      Array.isArray(a?.latLngs) &&
+      a.latLngs.length > 0 &&
+      a.latLngs.length === b?.latLngs?.length &&
+      a.latLngs.every((point, index) => samePoint(point, b.latLngs[index]))
+    );
+  }
+
+  async function refreshMapRoute(state, run) {
+    const before = routeBridge()?.routing;
+    if (!before || !hasDirections() || clearingRoute)
+      throw new Error('Waze route refresh is unavailable');
+    const selected = before.highlightedRoute;
+    const originalFit = state.map.zoomToExtent;
+    const ownFit = Object.getOwnPropertyDescriptor(state.map, 'zoomToExtent');
+    const sameDirections = (routing) =>
+      samePoint(before.from.latLng, routing?.from?.latLng) &&
+      samePoint(before.to.latLng, routing?.to?.latLng) &&
+      before.at === routing.at &&
+      before.reverse === routing.reverse;
+    // Suppress only fitting the refreshed route bounds, not arbitrary place/cluster fits.
+    const fit = function (bounds, ...args) {
+      const routing = routeBridge()?.routing;
+      if (sameDirections(routing) && Array.isArray(bounds) && bounds.length === 4) {
+        const points = [
+          routing.from.latLng,
+          routing.to.latLng,
+          ...(routing.routes || []).flatMap((route) => route.latLngs || []),
+        ];
+        let minLat = Infinity,
+          maxLat = -Infinity,
+          minLng = Infinity,
+          maxLng = -Infinity;
+        for (const point of points) {
+          minLat = Math.min(minLat, point.lat);
+          maxLat = Math.max(maxLat, point.lat);
+          minLng = Math.min(minLng, point.lng);
+          maxLng = Math.max(maxLng, point.lng);
+        }
+        if (
+          Math.abs(bounds[1] - minLat) < 1e-9 &&
+          Math.abs(bounds[3] - maxLat) < 1e-9 &&
+          bounds[0] <= minLng &&
+          bounds[2] >= maxLng
+        )
+          return;
+      }
+      return originalFit.apply(this, [bounds, ...args]);
+    };
+    if (typeof originalFit === 'function') state.map.zoomToExtent = fit;
+    const restoreFit = () => {
+      if (state.map.zoomToExtent === fit) {
+        if (ownFit) Object.defineProperty(state.map, 'zoomToExtent', ownFit);
+        else delete state.map.zoomToExtent;
+      }
+    };
+    run.cleanups.add(restoreFit);
+    try {
+      const result = await updateRoute(() => {}, true);
+      const current = routeBridge()?.routing;
+      if (
+        run.controller.signal.aborted ||
+        mapControl !== state ||
+        result === null ||
+        !sameDirections(current)
+      )
+        return 'cancelled';
+      if (!result) throw new Error('Waze could not refresh the route');
+      const match = current.routes?.find((route) => sameRoute(selected, route));
+      if (
+        match &&
+        current.highlightedRoute === current.routes[0] &&
+        match !== current.highlightedRoute
+      ) {
+        const store = findMapFiber(state, (node) => {
+          const candidates = [node.memoizedProps?.value];
+          for (let context = node.dependencies?.firstContext; context; context = context.next)
+            candidates.push(context.memoizedValue);
+          return candidates.find(
+            (value) => value?.state?.routing === current && typeof value.dispatch === 'function'
+          );
+        });
+        if (!store) throw new Error('Waze route selection could not be restored');
+        store.dispatch({ type: 'HIGHLIGHT', payload: match });
+      }
+      // Let native route-layer passive effects run while the fit guard is installed.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return 'ok';
+    } finally {
+      restoreFit();
+      run.cleanups.delete(restoreFit);
+    }
+  }
+
+  async function refreshMap(state) {
+    if (
+      mapControl !== state ||
+      state.busy ||
+      activeRequest ||
+      clearingRoute ||
+      routeBridge()?.routing.locked
+    )
+      return;
+    const run = { id: ++state.sequence, controller: new AbortController(), cleanups: new Set() };
+    state.run = run;
+    state.busy = true;
+    state.tileFailed = false;
+    state.parts = {
+      tiles: 'pending',
+      data: 'pending',
+      ...(hasDirections() && { route: 'pending' }),
+    };
+    renderMapRefresh(state);
+    const execute = async (part, action) => {
+      try {
+        const result = await action();
+        if (state.run === run) state.parts[part] = result || 'ok';
+      } catch (error) {
+        if (state.run === run)
+          state.parts[part] = run.controller.signal.aborted ? 'cancelled' : 'error';
+        if (!run.controller.signal.aborted)
+          console.warn(`[Waze Live Map Route Toolkit] Cannot refresh ${part}`, error);
+      }
+    };
+    const jobs = [
+      execute(
+        'tiles',
+        () =>
+          new Promise((resolve, reject) => {
+            state.finish = (error = false) => {
+              clearTimeout(state.timer);
+              state.timer = null;
+              state.finish = null;
+              if (error === true) reject(new Error('Map tiles could not be reloaded'));
+              else resolve('ok');
+            };
+            run.cleanups.add(() => state.finish?.(true));
+            state.timer = setTimeout(() => state.finish?.(true), 15000);
+            try {
+              if (!state.layer.redraw(true)) state.finish?.(true);
+            } catch (error) {
+              state.finish?.(true);
+            }
+          })
+      ),
+      execute('data', () => refreshMapData(state, run)),
+    ];
+    if (state.parts.route) jobs.push(execute('route', () => refreshMapRoute(state, run)));
+    await Promise.allSettled(jobs);
+    for (const cleanup of run.cleanups) cleanup();
+    if (mapControl !== state || state.run !== run) return;
+    state.run = null;
+    state.busy = false;
+    renderMapRefresh(state);
+  }
+
+  function unmountMapControls() {
+    const state = mapControl;
+    if (!state) return;
+    mapControl = null;
+    state.run?.controller.abort();
+    for (const cleanup of state.run?.cleanups || []) cleanup();
+    clearTimeout(state.timer);
+    state.ol.events.unregister('zoomend', state, state.updateZoom);
+    state.layer.events.unregister('loadend', state, state.onTilesLoaded);
+    state.layer.events.unregister('tileerror', state, state.onTileError);
+    state.root.unmount();
+    state.valueRoot.unmount();
+    state.resizeObserver?.disconnect();
+    if (state.desktopControls) {
+      state.desktopControls.removeAttribute('data-wlmrt-map-controls');
+      state.desktopControls.style.removeProperty('--wlmrt-controls-bottom');
+      state.desktopControls.style.removeProperty('--wlmrt-zoom-extra-height');
+    }
+    state.host.remove();
+    state.value.remove();
+    // Restore only our own configuration, without overwriting another extension.
+    if (state.layer.resolutions === state.resolutions) {
+      if (state.ol.div?.isConnected && state.map.getZoom() > state.original.maxZoomLevel) {
+        state.ol.setCenter(null, state.original.maxZoomLevel);
+      }
+      Object.assign(state.layer, state.original.layer);
+    }
+    if (state.map.maxZoomLevel === MAX_MAP_ZOOM) {
+      state.map.maxZoomLevel = state.original.maxZoomLevel;
+    }
+  }
+
+  function renderMapRefresh(state) {
+    if (mapControl !== state) return;
+    const errors = Object.keys(state.parts || {}).filter((part) => state.parts[part] === 'error');
+    const cancelled = Object.values(state.parts || {}).includes('cancelled');
+    const base = t('refreshMap');
+    const problem = errors.length
+      ? `${t('refreshFailed')}: ${errors.map((part) => t(`refreshParts.${part}`)).join(', ')}. ${t('retry')}`
+      : cancelled
+        ? t('refreshCancelled')
+        : '';
+    // The tooltip and accessible name describe the action, never its last error.
+    const label = base;
+    const disabled =
+      state.busy ||
+      Boolean(activeRequest) ||
+      clearingRoute ||
+      Boolean(routeBridge()?.routing.locked);
+    const signature = JSON.stringify([label, state.busy, disabled, problem]);
+    if (state.signature === signature) return;
+    state.signature = signature;
+    const { React, Tooltip } = state.runtime;
+    const button = React.createElement(
+      Tooltip,
+      { text: label, placement: 'left' },
+      React.createElement(
+        'button',
+        {
+          id: MAP_REFRESH_ID,
+          type: 'button',
+          className: 'wz-control-button',
+          'aria-label': label,
+          'aria-disabled': String(disabled),
+          'aria-busy': String(state.busy),
+          onClick: () => {
+            if (!disabled) refreshMap(state);
+          },
+        },
+        React.createElement(state.busy ? 'span' : 'i', {
+          className: state.busy ? 'wz-spinner' : 'w-icon w-icon-refresh',
+          'aria-hidden': 'true',
+        })
+      )
+    );
+    state.root.render(
+      React.createElement(
+        React.Fragment,
+        null,
+        button,
+        React.createElement(
+          'span',
+          { id: `${MAP_REFRESH_ID}-status`, role: 'status' },
+          state.busy ? '' : problem
+        )
+      )
+    );
+  }
+
+  function mountMapControls() {
+    // Waze replaces the recenter glyph with a spinner/off glyph while locating.
+    // The geolocation action stays on the button in every state.
+    const recenter = document.querySelector(
+      '.wz-map-control-container button.wz-control-button[data-event-action="geolocation_request"]'
+    );
+    const zoomIn = document.querySelector('.wz-map-ol-zoom-in');
+    const zoomOut = document.querySelector('.wz-map-ol-zoom-out');
+    if (!recenter || !zoomIn || !zoomOut || zoomIn.parentElement !== zoomOut.parentElement) {
+      unmountMapControls();
+      return;
+    }
+    const map = mapBridge(recenter);
+    const ol = map?.getOLMap();
+    const layer = map?.getLayerByName('LIVEMAP_TILES');
+    if (
+      !map ||
+      ol?.baseLayer !== layer ||
+      !Array.isArray(layer?.resolutions) ||
+      !layer.resolutions.length ||
+      typeof layer.redraw !== 'function' ||
+      !ol.events?.register ||
+      !ol.events?.unregister ||
+      !layer.events?.register ||
+      !layer.events?.unregister
+    ) {
+      unmountMapControls();
+      return;
+    }
+    if (
+      mapControl &&
+      (mapControl.map !== map ||
+        mapControl.layer !== layer ||
+        mapControl.zoomIn !== zoomIn ||
+        mapControl.zoomOut !== zoomOut)
+    )
+      unmountMapControls();
+    if (!mapControl) {
+      const runtime = nativeTooltipRuntime();
+      if (!runtime) return;
+      const host = document.createElement('div');
+      host.id = `${MAP_REFRESH_ID}-host`;
+      host.className = 'wz-map-control-container';
+      const value = document.createElement('output');
+      value.id = ZOOM_VALUE_ID;
+      // Let OpenLayers consume gestures here just like its native +/- controls.
+      value.className = 'olButton';
+      // Available on demand to assistive technology without announcing every gesture.
+      value.setAttribute('aria-live', 'off');
+      const state = {
+        map,
+        ol,
+        layer,
+        recenter,
+        zoomIn,
+        zoomOut,
+        host,
+        value,
+        runtime,
+        root: runtime.createRoot(host),
+        valueRoot: runtime.createRoot(value),
+        desktopControls: null,
+        busy: false,
+        timer: null,
+        sequence: 0,
+        run: null,
+        parts: {},
+        original: {
+          maxZoomLevel: map.maxZoomLevel,
+          layer: {
+            resolutions: layer.resolutions,
+            numZoomLevels: layer.numZoomLevels,
+            minResolution: layer.minResolution,
+          },
+        },
+      };
+      mapControl = state;
+      state.adjustPosition = () =>
+        state.desktopControls?.style.setProperty(
+          '--wlmrt-zoom-extra-height',
+          `${Math.ceil(value.getBoundingClientRect().height) || 15}px`
+        );
+      if (typeof ResizeObserver === 'function') {
+        state.resizeObserver = new ResizeObserver(state.adjustPosition);
+        state.resizeObserver.observe(value);
+      }
+      // Preserve Waze's existing resolution progression and extend it to level 19.
+      state.resolutions = layer.resolutions.slice();
+      while (state.resolutions.length <= MAX_MAP_ZOOM) {
+        state.resolutions.push(state.resolutions[state.resolutions.length - 1] / 2);
+      }
+      Object.assign(layer, {
+        resolutions: state.resolutions,
+        numZoomLevels: state.resolutions.length,
+        minResolution: state.resolutions.at(-1),
+      });
+      map.maxZoomLevel = MAX_MAP_ZOOM;
+      state.updateZoom = () => {
+        const zoom = map.getZoom();
+        if (!Number.isFinite(zoom)) return;
+        const text = String(Math.round(zoom * 100) / 100);
+        const label = `${t('zoomLevel')}: ${text}/${map.maxZoomLevel}`;
+        if (state.zoomLabel !== label) {
+          state.zoomLabel = label;
+          value.setAttribute('aria-label', label);
+          const { React, Tooltip } = runtime;
+          state.valueRoot.render(
+            React.createElement(
+              Tooltip,
+              { text: label, placement: 'left' },
+              React.createElement('span', null, text)
+            )
+          );
+        }
+        // Waze refreshes these on zoomend; also sync after changing the ceiling.
+        for (const [link, disabled] of [
+          [zoomIn, zoom >= MAX_MAP_ZOOM || zoom >= layer.numZoomLevels - 1],
+          [zoomOut, zoom <= map.minZoomLevel || zoom <= ol.getMinZoom()],
+        ]) {
+          link.setAttribute('aria-disabled', String(disabled));
+          link.classList.toggle('wz-map-ol-zoom-link-disabled', disabled);
+          if (disabled) link.setAttribute('tabindex', '-1');
+          else link.removeAttribute('tabindex');
+        }
+      };
+      state.onTilesLoaded = () =>
+        queueMicrotask(() => {
+          // redraw() can unload the old grid before starting the replacement grid.
+          if (mapControl === state && !layer.loading && !(layer.numLoadingTiles > 0)) {
+            state.finish?.(state.tileFailed === true);
+          }
+        });
+      state.onTileError = () => {
+        if (state.finish) state.tileFailed = true;
+      };
+      ol.events.register('zoomend', state, state.updateZoom);
+      layer.events.register('loadend', state, state.onTilesLoaded);
+      layer.events.register('tileerror', state, state.onTileError);
+      const hover = (enter) =>
+        host.firstElementChild?.dispatchEvent(
+          new MouseEvent(enter ? 'mouseover' : 'mouseout', {
+            bubbles: true,
+            relatedTarget: enter ? null : document.body,
+          })
+        );
+      host.addEventListener('focusin', () => hover(true));
+      host.addEventListener('focusout', () => hover(false));
+      host.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hover(false);
+      });
+    }
+    const state = mapControl;
+    // Reuse the roots/listeners when Waze replaces only its location control.
+    state.recenter = recenter;
+    const desktop = recenter.closest('.wz-desktop-controls');
+    if (state.desktopControls !== desktop) {
+      state.desktopControls?.removeAttribute('data-wlmrt-map-controls');
+      state.desktopControls?.style.removeProperty('--wlmrt-controls-bottom');
+      state.desktopControls?.style.removeProperty('--wlmrt-zoom-extra-height');
+      state.desktopControls = desktop;
+      if (desktop) {
+        const bottom =
+          desktop.style.getPropertyValue('--wlmrt-controls-bottom') ||
+          getComputedStyle(desktop).bottom;
+        desktop.style.setProperty(
+          '--wlmrt-controls-bottom',
+          bottom && bottom !== 'auto' ? bottom : '130px'
+        );
+        desktop.setAttribute('data-wlmrt-map-controls', '');
+      }
+    }
+    // Waze nests the location button's container inside another control container.
+    // Insert beside the outer control, directly under its native wrapper.
+    let locationHost = recenter.closest('.wz-map-control-container');
+    const wrapper = recenter.closest('.wz-custom-controls-wrapper');
+    if (wrapper) {
+      while (locationHost.parentElement !== wrapper) locationHost = locationHost.parentElement;
+    }
+    if (locationHost.previousElementSibling !== state.host) locationHost.before(state.host);
+    if (zoomIn.nextElementSibling !== state.value) zoomIn.after(state.value);
+    state.adjustPosition?.();
+    state.updateZoom();
+    renderMapRefresh(state);
+  }
+
+  function unmountVehicles() {
+    if (!vehicleControl) return;
+    vehicleControl.root?.unmount();
+    vehicleControl.row.remove();
+    vehicleControl = null;
+  }
+
+  function mountClear(title) {
+    if (!title || !hasDirections()) {
+      clearControl?.host.remove();
+      clearControl = null;
+      return;
+    }
+    if (!clearControl) {
+      const host = document.createElement('div');
+      host.id = `${CLEAR_ID}-host`;
+      const button = document.createElement('button');
+      button.id = CLEAR_ID;
+      button.type = 'button';
+      button.className = 'wz-sidebar-btn wz-icon w-icon-x w-icon';
+      button.addEventListener('click', clearRoute);
+      host.append(button);
+      clearControl = { host, button };
+    }
+    const { host, button } = clearControl;
+    if (host.parentElement !== title) title.append(host);
+    button.setAttribute('aria-label', t('clearRoute'));
+    button.setAttribute('aria-disabled', String(clearingRoute));
+    button.setAttribute('aria-busy', String(clearingRoute));
+  }
+
+  function mountVehicles(title) {
+    if (!vehicleControl) {
+      const row = document.createElement('div');
+      row.id = ID;
+      row.setAttribute('role', 'group');
+      row.addEventListener('mouseover', (event) => {
+        const button = event.target.closest('wz-button[data-vehicle]');
+        const shadow = button?.shadowRoot;
+        if (!shadow || shadow.querySelector('[data-wlmrt-selected-hover]')) return;
+        // Waze does not expose the hover layer as a CSS part or custom property.
+        // Scope this override to our own buttons and retain keyboard/press feedback.
+        const style = document.createElement('style');
+        style.setAttribute('data-wlmrt-selected-hover', '');
+        style.textContent = `
+          :host([aria-pressed="true"]) .wz-button.primary:hover:not(:focus-visible):not(:active) .color-layer {
+            background-color: transparent;
+          }
+        `;
+        shadow.append(style);
+      });
+      const hover = (event, enter) => {
+        const button = event.target.closest('wz-button');
+        if (!vehicleControl?.root || !button || button.parentElement === row) return;
+        button.parentElement.dispatchEvent(
+          new MouseEvent(enter ? 'mouseover' : 'mouseout', {
+            bubbles: true,
+            relatedTarget: enter ? null : document.body,
+          })
+        );
+      };
+      row.addEventListener('focusin', (event) => hover(event, true));
+      row.addEventListener('focusout', (event) => hover(event, false));
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hover(event, false);
+      });
+      vehicleControl = { row, root: null, signature: null };
+    }
+    const { row } = vehicleControl;
+    if (title.nextElementSibling !== row) title.after(row);
+    row.setAttribute('aria-label', t('vehicleType'));
+    const selected = selectedType();
+    const runtime = nativeTooltipRuntime();
+    const actions = vehicles.map((vehicle) => ({
+      label: t(`vehicles.${vehicle.type}`),
+      icon: vehicle.icon,
+      props: {
+        'data-vehicle': vehicle.type,
+        'aria-pressed': String(vehicle.type === selected),
+        disabled: vehicle.type === selected,
+        color: vehicle.type === selected ? 'primary' : 'clear-icon',
+      },
+      onClick: () => {
+        if (vehicle.type !== selectedType()) selectVehicle(vehicle.type);
+      },
+    }));
+    const signature = JSON.stringify([
+      selected,
+      actions.map((action) => action.label),
+      Boolean(runtime),
+    ]);
+    if (vehicleControl.signature === signature) return;
+    vehicleControl.signature = signature;
+    if (runtime) {
+      if (!vehicleControl.root) {
+        row.replaceChildren();
+        vehicleControl.root = runtime.createRoot(row);
+      }
+      const { React, Tooltip } = runtime;
+      vehicleControl.root.render(
+        actions.map((action, index) =>
+          React.createElement(
+            Tooltip,
+            { key: index, text: action.label, placement: 'top', delayMs: 400 },
+            React.createElement(
+              'wz-button',
+              {
+                type: 'button',
+                size: 'sm',
+                ...action.props,
+                'aria-label': action.label,
+                onClick: action.onClick,
+              },
+              React.createElement('i', {
+                className: `w-icon w-icon-${action.icon}`,
+                'aria-hidden': 'true',
+              })
+            )
+          )
+        )
+      );
+    } else {
+      // Keep controls usable while Waze's tooltip runtime is still loading.
+      row.replaceChildren(
+        ...actions.map((action) => {
+          const button = document.createElement('wz-button');
+          for (const [name, value] of Object.entries({
+            type: 'button',
+            size: 'sm',
+            ...action.props,
+            'aria-label': action.label,
+            title: action.label,
+          })) {
+            if (typeof value === 'boolean') button.toggleAttribute(name, value);
+            else button.setAttribute(name, value);
+          }
+          const icon = document.createElement('i');
+          icon.className = `w-icon w-icon-${action.icon}`;
+          icon.setAttribute('aria-hidden', 'true');
+          button.append(icon);
+          button.addEventListener('click', action.onClick);
+          return button;
+        })
+      );
+    }
+  }
+
+  // Isolate script integration failures; Waze still owns requests and errors.
+  const integrationWarnings = new Map();
+  function runIntegration(name, action) {
+    try {
+      const result = action();
+      integrationWarnings.delete(name);
+      return result;
+    } catch (error) {
+      const signature = `${error?.name}: ${error?.message}`;
+      if (integrationWarnings.get(name) !== signature) {
+        integrationWarnings.set(name, signature);
+        console.warn(`[Waze Live Map Route Toolkit] Cannot update ${name}`, error);
+      }
+    }
   }
 
   // Waze mounts and replaces its React panels after navigation and search.
+  function mount(full = true) {
+    runIntegration('translations', readTranslations);
+    runIntegration('styles', addStyle);
+    runIntegration('map controls', mountMapControls);
+    const title = document.querySelector('.wm-routing__title');
+    runIntegration('clear directions', () => mountClear(title));
+    if (!title) {
+      runIntegration('avoid options', unmountAvoids);
+      runIntegration('route refresh', unmountRefresh);
+      runIntegration('vehicles', unmountVehicles);
+      return;
+    }
+    runIntegration('route refresh', mountRefresh);
+    runIntegration('vehicles', () => mountVehicles(title));
+    runIntegration('avoid options', mountAvoids);
+    if (full) runIntegration('route details', mountRouteChips);
+  }
+
+  // State changes only need controls; DOM/navigation changes also refresh routes.
+  // A full update always wins when several signals arrive before the next frame.
   let pending = false;
-  const observer = new MutationObserver(() => {
+  let pendingFull = false;
+  function scheduleMount(full = true) {
+    pendingFull ||= full;
     if (pending) return;
     pending = true;
     requestAnimationFrame(() => {
       pending = false;
-      mount();
+      const full = pendingFull;
+      pendingFull = false;
+      mount(full);
     });
+  }
+
+  const ownedUI = `#${ID}, #${AVOID_ID}, #${REFRESH_ID}-host, #${CLEAR_ID}-host, #${MAP_REFRESH_ID}-host, #${ZOOM_VALUE_ID}, #${STYLE_ID}, .wlmrt-avoid-menu, .wlmrt-route-badges, .wlmrt-average-speed`;
+  const wazeUI =
+    '.wm-cards, .wm-routing, .wm-routing__title, #search-suggestions, .wm-routes__header, .wm-routes-item-desktop, #i18n-strings, .wz-map-control-container, .wz-custom-controls-wrapper, .wz-map-ol-zoom-control';
+  function affectsRouting(record) {
+    const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+    if (record.type === 'attributes') return target?.matches('.wm-cards');
+    // React roots, dropdown portals and badges manage their own contents.
+    if (target?.closest(ownedUI)) return false;
+    const added = [...record.addedNodes];
+    const removed = [...record.removedNodes];
+    if (
+      !removed.length &&
+      added.length &&
+      added.every((node) => node.nodeType === 1 && node.matches(ownedUI))
+    )
+      return false;
+    if (target?.closest(wazeUI)) return true;
+    // Observe the document for replacement panels, without scanning route data
+    // for unrelated map markers, tooltips or other page mutations.
+    return [...added, ...removed].some(
+      (node) => node.nodeType === 1 && (node.matches(wazeUI) || node.querySelector(wazeUI))
+    );
+  }
+  const observer = new MutationObserver((records) => {
+    if (records.some(affectsRouting)) scheduleMount();
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-  window.addEventListener('popstate', mount);
-  window.addEventListener('pageshow', mount);
-  customElements.whenDefined('wz-checkbox').then(mount);
-  mount();
+  observer.observe(document.documentElement, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+  window.addEventListener('popstate', () => scheduleMount());
+  window.addEventListener('pageshow', () => scheduleMount());
+  customElements.whenDefined('wz-checkbox').then(() => scheduleMount());
+  scheduleMount();
 })();
