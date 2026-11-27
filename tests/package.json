@@ -2,7 +2,7 @@
   "name": "waze-live-map-route-toolkit-tests",
   "private": true,
   "scripts": {
-    "test": "node --check ../waze-live-map-route-toolkit.user.js && node rapid-switch.test.cjs && node avoid-ui.test.cjs && node route-chips.test.cjs"
+    "test": "node --check ../waze-live-map-route-toolkit.user.js && node rapid-switch.test.cjs && node clear-route.test.cjs && node avoid-ui.test.cjs && node route-chips.test.cjs && node mount-lifecycle.test.cjs && node map-controls.test.cjs && node map-refresh.test.cjs"
   },
   "devDependencies": {
     "jsdom": "31.0.1",

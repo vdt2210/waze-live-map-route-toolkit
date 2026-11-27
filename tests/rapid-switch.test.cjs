@@ -6,6 +6,8 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'waze-
 function setup(initialURL, translations) {
   const timers = [];
   const requests = [];
+  const warnings = [];
+  let bridgeError = null;
   let now = 0;
   let panelOpen = true;
   const location = { href: initialURL || 'https://www.waze.com/live-map/directions?from=ll.1%2C2&to=ll.3%2C4&time=123&rp_vehicleType=PRIVATE#map' };
@@ -31,24 +33,31 @@ function setup(initialURL, translations) {
       request.fail = () => {
         if (!request.aborted) routing = { from, to, routes: undefined, error: new Error('network'), locked: false };
       };
-      return () => { request.aborted = true; request.aborts++; };
+      return () => {
+        if (request.cancelError) throw request.cancelError;
+        request.aborted = true; request.aborts++;
+      };
     }
   };
   const context = {
     URL, Date: { now: () => now }, location, history,
-    console: { warn() { } },
+    console: { warn(...args) { warnings.push(args); } },
     document: { documentElement: { lang: 'en' }, getElementById: () => translations ? { textContent: JSON.stringify(translations) } : null },
     setTimeout: callback => { timers.push(callback); }
   };
   const prefix = source.slice(0, source.indexOf('  // Waze mounts and replaces'));
-  context.bridge = () => panelOpen ? { routing, effect } : null;
+  context.bridge = () => {
+    if (bridgeError) throw bridgeError;
+    return panelOpen ? { routing, effect } : null;
+  };
   vm.runInNewContext(prefix + `
     routeBridge = bridge;
-    mount = () => {};
+    function scheduleMount() {}
     globalThis.test = { updateRoute, selectVehicle, selectAvoid, selectedAvoids, routeOptions, t, state: () => ({ failed, requestSequence, active: activeRequest?.id }) };
   })();`, context);
   return {
-    api: context.test, requests, location,
+    api: context.test, requests, location, warnings, holder,
+    setBridgeError: (error) => { bridgeError = error; },
     closePanel: () => { panelOpen = false; },
     changeDestination: () => { routing = { ...routing, to: { latLng: { lat: 5, lng: 6 } } }; },
     routes: () => routing.routes,
@@ -57,6 +66,43 @@ function setup(initialURL, translations) {
 }
 
 (async () => {
+  const cleanupFailure = setup();
+  const pendingCleanup = cleanupFailure.api.selectVehicle('MOTORCYCLE');
+  const selectedURL = cleanupFailure.location.href;
+  cleanupFailure.requests[0].cancelError = new Error('native cleanup failed');
+  assert.equal(await cleanupFailure.api.selectVehicle('TAXI'), false);
+  await cleanupFailure.tick();
+  await pendingCleanup;
+  assert.equal(cleanupFailure.requests.length, 1, 'failed cleanup must not start a competing request');
+  assert.equal(cleanupFailure.location.href, selectedURL);
+  assert.equal(cleanupFailure.api.state().active, undefined);
+  assert.equal(cleanupFailure.warnings.length, 1);
+  cleanupFailure.requests[0].cancelError = null;
+  const recoveredCleanup = cleanupFailure.api.selectVehicle('TAXI');
+  assert.equal(cleanupFailure.requests[0].aborted, true);
+  cleanupFailure.requests[1].complete();
+  await cleanupFailure.tick();
+  assert.equal(await recoveredCleanup, true);
+
+  const holderFailure = setup();
+  holderFailure.holder.destroy = () => { throw new Error('native effect cleanup failed'); };
+  const initialURL = holderFailure.location.href;
+  assert.equal(await holderFailure.api.selectVehicle('TAXI'), false);
+  assert.equal(holderFailure.location.href, initialURL, 'restore URL when native effect never starts');
+  assert.equal(holderFailure.requests.length, 0);
+  assert.equal(holderFailure.warnings.length, 1);
+
+  const brokenBridge = setup();
+  brokenBridge.setBridgeError(new Error('native route bridge failed'));
+  assert.equal(await brokenBridge.api.selectVehicle('TAXI'), false);
+  assert.equal(brokenBridge.requests.length, 0);
+  assert.equal(brokenBridge.warnings.length, 1);
+  brokenBridge.setBridgeError(null);
+  const recoveredBridge = brokenBridge.api.selectVehicle('TAXI');
+  brokenBridge.requests[0].complete();
+  await brokenBridge.tick();
+  assert.equal(await recoveredBridge, true);
+
   const avoids = setup('https://www.waze.com/live-map/directions?from=ll.1,2&to=ll.3,4&rp_vehicleType=TAXI&rp_options=ALLOW_UTURNS:f,AVOID_FERRIES:t&rp_options=custom:value,AVOID_TRAILS:t#map');
   const avoidOne = avoids.api.selectAvoid('AVOID_FERRIES', false);
   const avoidTwo = avoids.api.selectAvoid('unpaved', 'avoid_long');
@@ -213,8 +259,8 @@ function setup(initialURL, translations) {
   assert.equal(refresh.api.state().active, undefined);
   await refresh.api.selectVehicle('PRIVATE');
   assert.equal(refresh.requests.length, 1, 'ordinary selection still skips unchanged routes');
-  const vehicleMount = source.slice(source.indexOf('  function mount()'), source.indexOf('  // Waze mounts and replaces'));
+  const vehicleMount = source.slice(source.indexOf('  function mountVehicles('), source.indexOf('  // Waze mounts and replaces'));
   assert.ok(!/button\.disabled|aria-busy|cursor:\s*wait|let busy/.test(vehicleMount));
-  assert.match(source, /@version\s+1\.2\.1\s/);
-  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled vehicle buttons, refresh, slow success, native errors, navigation, version 1.2.1.');
+  assert.match(source, /@version\s+1\.2\.2\s/);
+  console.log('PASS: avoid options, preserved unknown flags, translation priority/fallback, rapid switches, cancellations, stale polls, retries, URL preservation, enabled vehicle buttons, refresh, slow success, native errors, navigation, version 1.2.2.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

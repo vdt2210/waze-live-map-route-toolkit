@@ -34,8 +34,9 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(document.querySelector('#waze-route-refresh-host'), null, 'wait safely until Waze runtime is available');
   assert.ok(document.querySelector('#waze-vehicle-icons'), 'other controls still mount without the tooltip runtime');
   window.webpackChunklivemap = chunks;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
+  await frame(); // Allow both independent React roots to commit after runtime discovery.
   const save = document.querySelector('[data-hook="SAVE_TO_APP_BUTTON"]');
   let refresh = document.getElementById('waze-route-refresh');
   const host = document.getElementById('waze-route-refresh-host');
@@ -54,10 +55,21 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.equal(window.getComputedStyle(header).alignItems, 'center');
   assert.equal(refresh.hasAttribute('title'), false, 'use Waze tooltip without a duplicate browser tooltip');
   assert.equal(document.querySelector('wz-basic-tooltip'), null);
-  assert.equal(refresh.getAttribute('aria-label'), 'Làm mới');
+  assert.equal(refresh.getAttribute('aria-label'), 'Làm mới tuyến đường');
   assert.equal(refresh.textContent, '', 'refresh uses only an icon');
   assert.equal(refresh.querySelector('.w-icon-refresh').getAttribute('aria-hidden'), 'true');
   assert.equal(refresh.disabled, true, 'refresh unavailable without a route bridge');
+  const vehicleRow = document.getElementById('waze-vehicle-icons');
+  for (const button of vehicleRow.querySelectorAll('wz-button')) {
+    assert.equal(button.getAttribute('size'), 'sm');
+    assert.equal(button.hasAttribute('title'), false, 'native tooltips replace browser titles');
+    assert.ok(nativeTooltip.renders.some((entry) => entry.text === button.getAttribute('aria-label')));
+  }
+  assert.equal(vehicleRow.querySelectorAll('wz-button').length, 3);
+  assert.equal(vehicleRow.querySelector('[data-vehicle="MOTORCYCLE"]').getAttribute('color'), 'primary');
+  assert.equal(document.getElementById('waze-route-clear'), null, 'no clear button before directions');
+  assert.equal(vehicleRow.querySelector('[data-vehicle="PRIVATE"]').getAttribute('color'), 'clear-icon');
+  assert.equal(vehicleRow.querySelector('[data-vehicle="TAXI"]').getAttribute('color'), 'clear-icon');
   const resultPanel = document.createElement('div');
   resultPanel.className = 'wm-routing__scrollable';
   resultPanel.innerHTML = '<div class="wm-routes"><div class="wm-routes__header">Routes</div><ul class="wm-routes__list"><li>Previous route</li></ul></div>';
@@ -84,28 +96,32 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   const effect = { tag: 8, deps: [routing.from.latLng, routing.to.latLng, 'now', false], create() {} };
   effect.next = effect;
   title.__reactFiber$test = { memoizedProps: { value: routing }, updateQueue: { lastEffect: effect } };
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   refresh = document.getElementById('waze-route-refresh');
   assert.equal(refresh.disabled, false);
   assert.equal(refresh.getAttribute('aria-busy'), 'false');
   routing.locked = true;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   refresh = document.getElementById('waze-route-refresh');
   assert.equal(refresh.disabled, true, 'native Waze loading also disables Refresh');
   assert.equal(refresh.getAttribute('aria-busy'), 'true');
+  assert.ok(refresh.querySelector('span.wz-spinner'));
+  assert.equal(refresh.querySelector('.w-icon-refresh'), null);
   routing.locked = false;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   refresh = document.getElementById('waze-route-refresh');
   assert.equal(refresh.disabled, false);
   assert.equal(refresh.getAttribute('aria-busy'), 'false');
   assert.ok(nativeTooltip.renders.length > 0, 'render the native component obtained from Save');
-  assert.deepEqual(nativeTooltip.renders.at(-1), { text: 'Làm mới', placement: 'top', delayMs: 400 });
+  assert.equal(refresh.querySelector('.wz-spinner'), null);
+  assert.ok(refresh.querySelector('i.w-icon-refresh'));
+  assert.deepEqual(nativeTooltip.renders.at(-1), { text: 'Làm mới tuyến đường', placement: 'top', delayMs: 400 });
   refresh.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
   await frame();
-  assert.equal(document.querySelector('body > .waze-tooltip')?.textContent, 'Làm mới');
+  assert.equal(document.querySelector('body > .waze-tooltip')?.textContent, 'Làm mới tuyến đường');
   refresh.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
   await frame();
   assert.equal(document.querySelector('.waze-tooltip'), null, 'native component closes its own portal');
@@ -118,13 +134,13 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   refresh.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
   await frame();
   routing.locked = true;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   assert.equal(document.querySelector('.waze-tooltip'), null, 'busy state unmounts native tooltip and its portal');
   assert.ok(nativeTooltip.unmounts() > 0);
   routing.locked = false;
   delete title.__reactFiber$test;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   const panel = document.getElementById('waze-route-avoids');
   const schedule = document.querySelector('.wm-routing-schedule');
@@ -139,7 +155,7 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   await frame();
   assert.equal(window.location.href, initialURL, 'component initialization must not change routing parameters');
   panel.open = true;
-  document.body.append(document.createElement('div'));
+  document.querySelector('.wm-routing').append(document.createElement('div'));
   await frame();
   assert.equal(panel.open, true, 'ordinary remount preserves expansion');
   assert.equal(document.querySelectorAll('#waze-route-refresh').length, 1);
@@ -171,6 +187,31 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   assert.match(new URL(window.location.href).searchParams.get('rp_options'), /ALLOW_UTURNS:f/);
   assert.equal(new URL(window.location.href).searchParams.get('rp_vehicleType'), 'MOTORCYCLE');
   const unpaved = panel.querySelector('[data-avoid="unpaved"]');
+  const viewportErrors = [];
+  const captureViewportError = (event) => {
+    viewportErrors.push(event.error || event.message);
+    event.preventDefault();
+  };
+  window.addEventListener('error', captureViewportError);
+  try {
+    for (const type of ['resize', 'scroll']) {
+      unpaved.click();
+      const openMenu = document.querySelector('.wlmrt-avoid-menu');
+      openMenu.dispatchEvent(new window.Event('scroll', { bubbles: true }));
+      assert.ok(openMenu.isConnected, 'scrolling inside the dropdown keeps it open');
+      window.dispatchEvent(new window.Event(type));
+      assert.equal(document.querySelector('.wlmrt-avoid-menu'), null, `${type} closes the dropdown`);
+      assert.equal(unpaved.getAttribute('aria-expanded'), 'false');
+      window.dispatchEvent(new window.Event(type));
+      assert.equal(document.querySelector('.wlmrt-avoid-menu'), null, `${type} is safe while closed`);
+    }
+    unpaved.click();
+    document.dispatchEvent(new window.Event('scroll'));
+    assert.equal(document.querySelector('.wlmrt-avoid-menu'), null, 'document scroll also closes the dropdown');
+    assert.deepEqual(viewportErrors, [], 'window targets must not cause Node.contains errors');
+  } finally {
+    window.removeEventListener('error', captureViewportError);
+  }
   unpaved.click();
   const menu = document.querySelector('.wlmrt-avoid-menu');
   assert.ok(menu);
@@ -219,15 +260,19 @@ const change = node => node.dispatchEvent(new window.Event('change', { bubbles: 
   // History navigation restores controls from the URL rather than stale DOM.
   window.history.replaceState(null, '', '?rp_vehicleType=TAXI&rp_options=AVOID_FERRIES:f,AVOID_TRAILS:f,AVOID_LONG_TRAILS:t');
   window.dispatchEvent(new window.PopStateEvent('popstate'));
+  await frame();
   assert.equal(remounted.querySelector('[data-avoid="AVOID_FERRIES"]').checked, false);
   assert.equal(remounted.querySelector('[data-avoid="unpaved"]').dataset.value, 'avoid_long');
-  assert.equal(document.querySelector('button[data-vehicle="TAXI"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelector('wz-button[data-vehicle="TAXI"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelector('wz-button[data-vehicle="TAXI"]').getAttribute('color'), 'primary');
+  assert.equal(document.querySelector('wz-button[data-vehicle="MOTORCYCLE"]').getAttribute('color'), 'clear-icon');
 
   // Missing route bridge: preserve URL, restore checkbox and expose Retry.
   window.history.replaceState(null, '', '?from=ll.1,2&to=ll.3,4&rp_options=AVOID_FERRIES:f');
   const before = window.location.href;
   const unavailable = remounted.querySelector('[data-avoid="AVOID_FERRIES"]');
   unavailable.checked = true; change(unavailable);
+  await frame();
   assert.equal(window.location.href, before);
   assert.equal(unavailable.checked, false);
   assert.equal(remounted.querySelector('[data-i18n="retry"]'), null);

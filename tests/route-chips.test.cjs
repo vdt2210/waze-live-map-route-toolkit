@@ -8,6 +8,10 @@ const dom = new JSDOM('<html lang="vi"><head></head><body><div class="wm-routing
 });
 const { window } = dom;
 const { document } = window;
+// Flush the real scheduled update explicitly instead of assuming synchronous events.
+let pendingFrame;
+window.requestAnimationFrame = (callback) => { pendingFrame = callback; return 1; };
+const flushFrame = () => { const callback = pendingFrame; pendingFrame = null; callback?.(); };
 const routes = [
   { isToll: true, tollPriceInfo: { tollPrice: 47000, tollPriceCurrencyCode: 'VND' }, jams: [{ id: 1, severity: 0 }, { id: 2, severity: 2 }, { id: 2, severity: 2 }] },
   { isToll: true, tollPriceInfo: { tollPrice: 61000, tollPriceCurrencyCode: 'VND' }, jams: [] },
@@ -23,6 +27,7 @@ const cards = routes.map(route => {
   return card;
 });
 window.eval(source);
+flushFrame();
 const chips = card => [...card.querySelectorAll('.wlmrt-route-badges li')].map(node => node.textContent);
 assert.equal(chips(cards[0])[0], `Thu phí: ${new Intl.NumberFormat('vi', { style: 'currency', currency: 'VND', currencyDisplay: 'symbol' }).format(47000)}`);
 assert.equal(chips(cards[0])[1], 'Kẹt xe vừa ×1');
@@ -30,7 +35,7 @@ assert.match(chips(cards[1])[0], /61/);
 assert.deepEqual(chips(cards[2]), []);
 assert.ok(cards[0].querySelector('.wm-routes-item-desktop__footer').nextElementSibling.matches('ul.wm-routing-badges.wlmrt-route-badges'));
 assert.equal(window.getComputedStyle(cards[0].querySelector('.wlmrt-route-badges')).flexWrap, 'wrap');
-const refresh = () => window.dispatchEvent(new window.Event('pageshow'));
+const refresh = () => { window.dispatchEvent(new window.Event('pageshow')); flushFrame(); };
 routes[2].meters = 100000;
 routes[2].seconds = 7200;
 refresh();

@@ -3,7 +3,7 @@ const React = require('react');
 const { createRoot, hydrateRoot } = require('react-dom/client');
 const { createPortal } = require('react-dom');
 
-module.exports = function installNativeTooltip(window) {
+module.exports = function installNativeTooltip(window, { http } = {}) {
   global.window = window;
   global.document = window.document;
   const renders = [];
@@ -21,21 +21,30 @@ module.exports = function installNativeTooltip(window) {
     ));
   }
   const save = window.document.querySelector('[data-hook="SAVE_TO_APP_BUTTON"]');
-  save.__reactFiber$test = { return: {
+  const anchor = save || window.document.querySelector('.wz-map-control-container .wz-control-button');
+  anchor.__reactFiber$test = { return: {
     type: NativeTooltip,
-    memoizedProps: { text: 'Save', placement: 'top', children: { props: { 'data-hook': 'SAVE_TO_APP_BUTTON' } } },
+    memoizedProps: save
+      ? { text: 'Save', placement: 'top', children: { props: { 'data-hook': 'SAVE_TO_APP_BUTTON' } } }
+      : { text: 'Show my location', placement: 'left', children: { props: { className: 'wz-control-button is-available' } } },
   } };
   const factories = {
     // Arbitrary IDs ensure discovery does not depend on production module IDs.
     react_test(module) {
       module.exports.createElement = React.createElement;
       module.exports.useState = React.useState;
+      module.exports.Fragment = React.Fragment;
     },
     renderer_test(module) {
       module.exports.createRoot = createRoot;
       module.exports.hydrateRoot = hydrateRoot;
     },
     unrelated() { throw new Error('unrelated factories must not execute'); },
+  };
+  if (http) factories.http_test = function (module) {
+    module.exports.AxiosHeaders = class {};
+    module.exports.isAxiosError = () => false;
+    Object.assign(module.exports, http);
   };
   const cache = {};
   const requireModule = (id) => {
